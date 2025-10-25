@@ -22,6 +22,7 @@ from .asr import (
 from .audio import AudioCaptureError, AudioChunkStream
 from .config import BackendChoice, Settings, load_settings
 from .zoom_caption import ZoomCaptionPublisher
+from .display.webui import CaptionWebUI
 
 
 @dataclass
@@ -108,6 +109,7 @@ class TranscriptionPipeline:
         self._transcript_logger = TranscriptFileLogger(
             self.settings.logging, override_path=transcript_log_override
         )
+        self._web_ui: Optional[CaptionWebUI] = None
         self.state = PipelineState()
         self._running = False
 
@@ -123,6 +125,12 @@ class TranscriptionPipeline:
         try:
             with self._transcript_logger:
                 async with self._zoom_publisher:
+                    if self.settings.web.enabled:
+                        self._web_ui = CaptionWebUI(
+                            host=self.settings.web.host,
+                            port=self.settings.web.port,
+                        )
+                        await self._web_ui.start()
                     async with self._audio_stream.connect() as audio_stream:
                         async with backend:
                             await self._main_loop(audio_stream, backend)
@@ -135,6 +143,9 @@ class TranscriptionPipeline:
             logging.error("Pipeline stopped due to error: %s", exc)
             raise
         finally:
+            if self._web_ui:
+                await self._web_ui.stop()
+                self._web_ui = None
             self._running = False
             logging.info("Transcription pipeline stopped.")
 
@@ -188,9 +199,13 @@ class TranscriptionPipeline:
             if result.is_final:
                 logging.info("Final: %s", result.text)
                 self._transcript_logger.log_final(result)
+                if self._web_ui:
+                    await self._web_ui.broadcast({"type": "final", "text": result.text})
             else:
                 if result.text:
                     logging.debug("Partial: %s", result.text)
+                    if self._web_ui:
+                        await self._web_ui.broadcast({"type": "partial", "text": result.text})
 
             zoom_payload = self.state.add_result(result)
             if zoom_payload:

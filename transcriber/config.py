@@ -71,6 +71,11 @@ class TranscriptLoggingConfig(BaseModel):
     overwrite: bool = False
 
 
+class WebUIConfig(BaseModel):
+    enabled: bool = False
+    host: str = "127.0.0.1"
+    port: int = 8765
+
 class BackendChoice(str, Enum):
     """Supported transcription backends."""
 
@@ -101,6 +106,7 @@ class Settings(BaseModel):
     whisper: Optional[WhisperConfig] = None
     zoom: ZoomCaptionConfig = ZoomCaptionConfig()
     logging: TranscriptLoggingConfig = TranscriptLoggingConfig()
+    web: WebUIConfig = WebUIConfig()
 
 
 @lru_cache(maxsize=1)
@@ -197,6 +203,11 @@ def load_settings() -> Settings:
                 ),
             ),
             logging=logging_cfg,
+            web=WebUIConfig(
+                enabled=env.get("WEB_UI_ENABLED", "false").lower() in {"1","true","yes"},
+                host=env.get("WEB_UI_HOST", "127.0.0.1"),
+                port=int(env.get("WEB_UI_PORT", "8765")),
+            ),
         )
         return settings
     except KeyError as exc:
