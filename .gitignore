@@ -1,0 +1,17 @@
+# Python artifacts
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+.venv/
+.venv311/
+
+# Local config & logs
+.env
+logs/
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
