@@ -85,6 +85,38 @@ TRANSCRIPT_LOG_ENABLED=true
 TRANSCRIPT_LOG_PATH=logs/meet-session.log
 ```
 
+### 3.1 GitHub からダウンロードしたユーザー向け（環境構築スクリプト）
+
+オンライン（通常）
+- 依存は `requirements.txt` に集約。以下のスクリプトで仮想環境の作成〜インストールまで自動化。
+  ```bash
+  git clone <このリポジトリ>
+  cd <クローン先>
+  scripts/bootstrap_env.sh          # .venv311 を作成し依存をインストール
+  source .venv311/bin/activate      # 有効化
+  cp .env.example .env && vi .env   # 設定（APIキー/リージョン/デバイス）
+  ```
+
+オフライン（事前に wheelhouse を同梱する配布形態）
+- 配布側（ネット接続できる環境）で wheelhouse を作り、コードと併せて配布。
+  ```bash
+  scripts/bootstrap_env.sh              # まずは通常の環境で構築
+  scripts/offline_prepare_wheels.sh     # ./wheelhouse に必要なホイールを収集
+  # => リポジトリ一式 + wheelhouse/ を zip/tar でまとめて配布
+  ```
+- 利用側（ネット接続なし）
+  ```bash
+  tar xzf <配布物>.tar.gz
+  cd <展開先>
+  scripts/offline_install.sh            # wheelhouse から依存をインストール
+  source .venv311/bin/activate
+  cp .env.example .env && vi .env
+  ```
+
+注意
+- `.env` と `logs/` は `.gitignore` 済み（機微情報・不要ファイルをコミットしない）。
+- Windows でスクリプトを実行する場合は Git Bash か WSL を推奨（PowerShell 用に読み替える場合は `source` 相当のコマンドを使用）。
+
 ---
 
 ## 4. 実行手順
