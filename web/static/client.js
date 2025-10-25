@@ -3,6 +3,8 @@
   const partialEl = document.getElementById('partial');
   const showPartial = document.getElementById('showPartial');
   const fontSize = document.getElementById('fontSize');
+  const historyEl = document.getElementById('history');
+  const darkMode = document.getElementById('darkMode');
 
   fontSize.addEventListener('input', () => {
     const v = fontSize.value;
@@ -13,6 +15,13 @@
   showPartial.addEventListener('change', () => {
     partialEl.style.display = showPartial.checked ? 'block' : 'none';
   });
+
+  function setTheme() {
+    document.body.classList.remove('dark','light');
+    document.body.classList.add(darkMode.checked ? 'dark' : 'light');
+  }
+  darkMode.addEventListener('change', setTheme);
+  setTheme();
 
   function connect() {
     const wsUrl = `ws://${location.host}/ws`;
@@ -25,11 +34,19 @@
     ws.onmessage = (ev) => {
       try {
         const msg = JSON.parse(ev.data);
+        const speaker = msg.speaker ? `[${msg.speaker}] ` : '';
         if (msg.type === 'partial') {
-          if (showPartial.checked) partialEl.textContent = msg.text || '';
+          if (showPartial.checked) partialEl.textContent = speaker + (msg.text || '');
         } else if (msg.type === 'final') {
-          // Show as larger line and clear partial
-          if ((msg.text||'').trim()) finalEl.textContent = msg.text;
+          const text = (msg.text||'').trim();
+          if (text) {
+            finalEl.textContent = speaker + text;
+            const row = document.createElement('div');
+            row.className = 'row';
+            row.textContent = speaker + text;
+            historyEl.appendChild(row);
+            historyEl.scrollTop = historyEl.scrollHeight;
+          }
           partialEl.textContent = '';
         }
       } catch (e) { console.warn('bad message', e); }
@@ -37,4 +54,3 @@
   }
   connect();
 })();
-

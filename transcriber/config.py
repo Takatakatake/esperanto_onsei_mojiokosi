@@ -75,6 +75,7 @@ class WebUIConfig(BaseModel):
     enabled: bool = False
     host: str = "127.0.0.1"
     port: int = 8765
+    open_browser: bool = False
 
 class BackendChoice(str, Enum):
     """Supported transcription backends."""
@@ -207,6 +208,7 @@ def load_settings() -> Settings:
                 enabled=env.get("WEB_UI_ENABLED", "false").lower() in {"1","true","yes"},
                 host=env.get("WEB_UI_HOST", "127.0.0.1"),
                 port=int(env.get("WEB_UI_PORT", "8765")),
+                open_browser=env.get("WEB_UI_OPEN_BROWSER", "false").lower() in {"1","true","yes"},
             ),
         )
         return settings

@@ -8,14 +8,20 @@
   </head>
   <body>
     <div id="wrap">
-      <div id="final"></div>
-      <div id="partial" class="faint"></div>
-      <div id="controls">
-        <label><input type="checkbox" id="showPartial" checked /> Partial を表示</label>
-        <label>フォントサイズ: <input type="range" id="fontSize" min="24" max="96" value="48" /></label>
+      <div id="header">
+        <span>Esperanto Live Captions</span>
+        <div id="controls">
+          <label><input type="checkbox" id="showPartial" checked /> Partial</label>
+          <label>Font: <input type="range" id="fontSize" min="24" max="96" value="48" /></label>
+          <label><input type="checkbox" id="darkMode" checked /> Dark</label>
+        </div>
       </div>
+      <div id="board">
+        <div id="final"></div>
+        <div id="partial" class="faint"></div>
+      </div>
+      <div id="history"></div>
     </div>
     <script src="/static/client.js"></script>
   </body>
   </html>
-

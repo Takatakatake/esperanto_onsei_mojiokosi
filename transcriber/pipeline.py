@@ -23,6 +23,8 @@ from .audio import AudioCaptureError, AudioChunkStream
 from .config import BackendChoice, Settings, load_settings
 from .zoom_caption import ZoomCaptionPublisher
 from .display.webui import CaptionWebUI
+import webbrowser
+import functools
 
 
 @dataclass
@@ -131,6 +133,10 @@ class TranscriptionPipeline:
                             port=self.settings.web.port,
                         )
                         await self._web_ui.start()
+                        if self.settings.web.open_browser:
+                            url = f"http://{self.settings.web.host}:{self.settings.web.port}"
+                            loop = asyncio.get_running_loop()
+                            await loop.run_in_executor(None, functools.partial(webbrowser.open, url))
                     async with self._audio_stream.connect() as audio_stream:
                         async with backend:
                             await self._main_loop(audio_stream, backend)
@@ -200,12 +206,20 @@ class TranscriptionPipeline:
                 logging.info("Final: %s", result.text)
                 self._transcript_logger.log_final(result)
                 if self._web_ui:
-                    await self._web_ui.broadcast({"type": "final", "text": result.text})
+                    await self._web_ui.broadcast({
+                        "type": "final",
+                        "text": result.text,
+                        "speaker": result.speaker,
+                    })
             else:
                 if result.text:
                     logging.debug("Partial: %s", result.text)
                     if self._web_ui:
-                        await self._web_ui.broadcast({"type": "partial", "text": result.text})
+                        await self._web_ui.broadcast({
+                            "type": "partial",
+                            "text": result.text,
+                            "speaker": result.speaker,
+                        })
 
             zoom_payload = self.state.add_result(result)
             if zoom_payload:
