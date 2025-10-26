@@ -13,11 +13,11 @@
 
 ## 0. 最短クイックチェック（5分）
 
-1) 仮想環境を作成して有効化（本ドキュメントでは `.venv` を推奨）:
+1) 仮想環境を作成して有効化（本ドキュメントでは `.venv311` を使用）:
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
+python3.11 -m venv .venv311
+source .venv311/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
 ```
@@ -28,13 +28,13 @@ pip install -r requirements.txt
 python -m transcriber.cli --list-devices
 ```
 
-3) `.env` を準備: リポジトリに同梱されているテンプレート ` .env.example` をコピーして使用します（`cp .env.example .env`）。実値は絶対にコミットしないでください。
+3) `.env` を準備: リポジトリに同梱されているテンプレート `.env.example` をコピーして使用します（`cp .env.example .env`）。実値は絶対にコミットしないでください。
 
 4) 設定例（最低限）:
 
 ```ini
 SPEECHMATICS_API_KEY=<YOUR_KEY>
-SPEECHMATICS_CONNECTION_URL=wss://eu2.rt.speechmatics.com/v2  # base URL（例: eu2 / us2）
+SPEECHMATICS_CONNECTION_URL=wss://<region>.rt.speechmatics.com/v2  # region base URL（例: eu2 / us2）。実際の接続は <base>/v2/<language> の形式になります（例: wss://eu2.rt.speechmatics.com/v2/eo）。
 SPEECHMATICS_LANGUAGE=eo
 AUDIO_DEVICE_INDEX=8
 ```
@@ -53,10 +53,10 @@ python -m transcriber.cli --log-level=INFO
 ## 3. セットアップ手順（初回）
 
 1) Python 環境
-- Python 3.11 を使う場合の仮想環境作成（本ドキュメントでは `.venv` を推奨。必要に応じて `.venv311` を使ってください）
+- Python 3.11 を使う場合の仮想環境作成（本ドキュメントは `.venv311` を前提とします）
   ```bash
-  python3.11 -m venv .venv
-  source .venv/bin/activate
+  python3.11 -m venv .venv311
+  source .venv311/bin/activate
   pip install --upgrade pip
   pip install -r requirements.txt
   ```
@@ -81,7 +81,7 @@ python -m transcriber.cli --log-level=INFO
 ```ini
 TRANSCRIPTION_BACKEND=speechmatics
 SPEECHMATICS_API_KEY=<長期APIキー>
-SPEECHMATICS_CONNECTION_URL=wss://eu2.rt.speechmatics.com/v2  # US契約なら us2
+SPEECHMATICS_CONNECTION_URL=wss://<region>.rt.speechmatics.com/v2  # region base URL（例: eu2 / us2）。実際の接続は <base>/v2/<language> の形式になります。
 SPEECHMATICS_LANGUAGE=eo
 AUDIO_DEVICE_INDEX=8        # 例: pipewire
 ZOOM_CC_ENABLED=false       # Meet利用のため
@@ -113,8 +113,8 @@ Web UI を共有するだけで良い場合は Webhook を省略可能。Webhook
   ```bash
   git clone <このリポジトリ>
   cd <クローン先>
-  scripts/bootstrap_env.sh          # .venv を作成し依存をインストール
-  source .venv/bin/activate      # 有効化
+  scripts/bootstrap_env.sh          # .venv311 を作成し依存をインストール
+  source .venv311/bin/activate      # 有効化
   cp .env.example .env && vi .env   # 設定（APIキー/リージョン/デバイス）
   ```
 
@@ -130,7 +130,7 @@ Web UI を共有するだけで良い場合は Webhook を省略可能。Webhook
   tar xzf <配布物>.tar.gz
   cd <展開先>
   scripts/offline_install.sh            # wheelhouse から依存をインストール
-  source .venv/bin/activate
+  source .venv311/bin/activate
   cp .env.example .env && vi .env
   ```
 
@@ -160,19 +160,28 @@ python -m pip install --upgrade pip setuptools wheel
 - `.env` と `logs/` は `.gitignore` 済み（機微情報・不要ファイルをコミットしない）。
 - Windows でスクリプトを実行する場合は Git Bash か WSL を推奨（PowerShell 用に読み替える場合は `source` 相当のコマンドを使用）。
 
+### 緊急手順: 秘密情報がリポジトリ内で発見された場合（簡易ガイド）
+
+1. まずローカル作業コピーで該当ファイル（例: `*.json`, `.env` 等）を安全な場所へ退避し、リポジトリから削除する（新規コミットを作成して削除する）。
+2. 直ちに当該キー/サービスのローテーション（鍵削除・再発行）を行う。Google サービスアカウントであればコンソールで鍵を削除してください。
+3. 既にリモート（例: GitHub）へ公開されている場合はチームと連携し、履歴消去（`git-filter-repo` / BFG 等）や対応通知を検討する。履歴書き換えは注意が必要です。
+4. 再発防止策として、`.gitignore` に該当パターン（`.env`, `*.json`, `gen-lang-client-*.json` 等）を追加し、Secret scanning や CI のチェックを導入することを推奨します。
+
+(このドキュメントは手順の提示のみで、操作は行いません。実作業をこちらで行う場合は事前承認をお願いします。)
+
 ---
 
 ## 4. 実行手順
 
 1) 設定確認
 ```bash
-.venv/bin/python -m transcriber.cli --show-config
+.venv311/bin/python -m transcriber.cli --show-config
 ```
 `speechmatics.connection_url` と `audio.sample_rate=16000` を確認。
 
 2) 起動（Speechmatics）
 ```bash
-.venv/bin/python -m transcriber.cli --backend=speechmatics --log-level=INFO
+.venv311/bin/python -m transcriber.cli --backend=speechmatics --log-level=INFO
 ```
 正常時:
 - `Recognition started.` → `Final: ...` が出力され、`logs/meet-session.log` に追記されます。
@@ -190,7 +199,7 @@ Sanity テスト（任意）
 3) バックアップ起動（オフライン Vosk）
 ```bash
 # 事前に .env に VOSK_MODEL_PATH を設定
-.venv/bin/python -m transcriber.cli --backend=vosk --log-file logs/offline.log
+.venv311/bin/python -m transcriber.cli --backend=vosk --log-file logs/offline.log
 ```
 
 ---
@@ -331,7 +340,7 @@ Sanity テスト（任意）
 
 ```bash
 # 仮想環境
-source .venv/bin/activate
+source .venv311/bin/activate
 
 # デバイス列挙
 python -m transcriber.cli --list-devices
@@ -355,7 +364,7 @@ python -m transcriber.cli --backend=speechmatics --log-level=DEBUG
 
 ```bash
 install -Dm755 scripts/run_transcriber.sh ~/bin/run-transcriber.sh
-source .venv/bin/activate
+source .venv311/bin/activate
 ~/bin/run-transcriber.sh                # backend=speechmatics, PORT=8765
 PORT=8766 ~/bin/run-transcriber.sh      # ポートを変える場合
 ```
@@ -366,7 +375,7 @@ PORT=8766 ~/bin/run-transcriber.sh      # ポートを変える場合
 
 ```bash
 install -Dm755 scripts/prep_webui.sh ~/bin/prep-webui.sh
-source .venv/bin/activate
+source .venv311/bin/activate
 ~/bin/prep-webui.sh && python -m transcriber.cli --backend=speechmatics --log-level=INFO
 ```
 

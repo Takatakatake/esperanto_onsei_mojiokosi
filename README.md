@@ -20,7 +20,7 @@ Zoom や Google Meet でのエスペラント会話を、低遅延でリアル�
 ## 1. 前提条件（Prerequisites）
 
  - Python 3.10 以上（CPython 3.10/3.11 で検証）
- - 依存を隔離するために `virtualenv` または `python -m venv` を利用してください（本ドキュメントでは仮想環境名を `.venv` とします。Python 3.11 固有の環境名を使いたい場合は `.venv311` としてください）。
+- Python 3.11 の仮想環境を `.venv311` という名前で作成して利用してください。
 - 会議アプリの音声を PC 内へループバックする仕組み（VB-Audio/VoiceMeeter/BlackHole/JACK など）
 - Speechmatics アカウント（Realtime の利用権限と API キー）
 - Zoom で CC（字幕）URL を取得できるホスト権限（または Recall.ai/Meeting SDK 等でメディア取得）
@@ -37,11 +37,11 @@ Zoom や Google Meet でのエスペラント会話を、低遅延でリアル�
 ```bash
 git clone git@github.com:Takatakatake/esperanto_onsei_mojiokosi.git
 cd esperanto_onsei_mojiokosi
-python -m venv .venv
-source .venv/bin/activate
+python3.11 -m venv .venv311
+source .venv311/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
-# リポジトリには伏せ字入りのテンプレート ` .env.example` を同梱しています（安全な雛形）。
+# リポジトリには伏せ字入りのテンプレート `.env.example` を同梱しています（安全な雛形）。
 # 実運用では `cp .env.example .env` のうえで実値を設定してください。実値を含む `.env` は絶対にコミットしないでください（`.gitignore` に追加することを推奨します）。
 # 既に `.env` がある場合は開いて値を置き換えてください
 # 無い場合は例からコピーして編集:
@@ -52,8 +52,8 @@ test -f .env || cp .env.example .env
 
 ```ini
 SPEECHMATICS_API_KEY=****************************   # 本物のキーに置換
-SPEECHMATICS_CONNECTION_URL=wss://eu2.rt.speechmatics.com/v2   # リージョンを含む base URL を指定（例: eu2 / us2）
-SPEECHMATICS_LANGUAGE=eo                                     # 言語は別途指定（実装は base URL に言語サフィックスを付加して接続します）
+SPEECHMATICS_CONNECTION_URL=wss://<region>.rt.speechmatics.com/v2   # region base URL の形式。例: eu2 または us2
+SPEECHMATICS_LANGUAGE=eo                                     # 言語コード（例: eo）。実際の接続先は <base>/v2/<language> の形式になります（例: wss://eu2.rt.speechmatics.com/v2/eo）。
 AUDIO_DEVICE_INDEX=8                               # --list-devices の番号
 WEB_UI_ENABLED=true
 TRANSLATION_ENABLED=true
@@ -75,11 +75,11 @@ Web UI は `http://127.0.0.1:8765` で開けます（`.env` の `WEB_UI_OPEN_BRO
 
 ```bash
 cd /media/yamada/SSD-PUTA1/CODEX作業用202510
-python -m venv .venv
-source .venv/bin/activate
+python3.11 -m venv .venv311
+source .venv311/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
-# `.env` はテンプレート ` .env.example` を同梱しています。実運用では `cp .env.example .env` の上で実値を設定してください。
+# `.env` はテンプレート `.env.example` を同梱しています。実運用では `cp .env.example .env` の上で実値を設定してください。
 test -f .env || cp .env.example .env
 ```
 
@@ -220,7 +220,7 @@ Web UI を常に `8765` で起動し「ポート占有」問題を避けるた�
 
 ```bash
 install -Dm755 scripts/run_transcriber.sh ~/bin/run-transcriber.sh
-source /media/yamada/SSD-PUTA1/CODEX作業用202510/.venv/bin/activate
+source /media/yamada/SSD-PUTA1/CODEX作業用202510/.venv311/bin/activate
 ~/bin/run-transcriber.sh              # backend=speechmatics, log-level=INFO
 ```
 
@@ -236,7 +236,7 @@ PORT=8766 LOG_LEVEL=DEBUG BACKEND=whisper ~/bin/run-transcriber.sh
 
 ```bash
 install -Dm755 scripts/prep_webui.sh ~/bin/prep-webui.sh
-source /media/yamada/SSD-PUTA1/CODEX作業用202510/.venv/bin/activate
+source /media/yamada/SSD-PUTA1/CODEX作業用202510/.venv311/bin/activate
 ~/bin/prep-webui.sh && python -m transcriber.cli --backend=speechmatics --log-level=INFO
 ```
 
@@ -251,7 +251,7 @@ sleep 0.2
 # SIGTERM を送って穏やかに終了させます（プロセスが応答しない場合のみ次の手段を検討）。
 lsof -t -iTCP:8765 | xargs -r kill || true
 sleep 0.5 && lsof -iTCP:8765 || true
-# どうしても解放されない場合のみ、管理者と相談のうえで強制終了（kill -9）を検討してください。
+# どうしても解放されない場合のみ、管理者と相談のうえで強制終了（kill -9）を検討してください。なお、`kill -9` はプロセスにクリーンな終了処理をさせないため、一時ファイルやソケットの残存、リソースリークを招く可能性があります。まずは SIGTERM（普通の kill）での終了を試みてください。
 ```
 
 その後、通常どおり `python -m transcriber.cli ...` を再起動してください。
@@ -364,6 +364,15 @@ sleep 0.5 && lsof -iTCP:8765    # 何も出なければOK
 - 本リポジトリには学習/再現容易性のため、伏せ字入りの `.env` を「追跡」しています（実値は空欄や `*`）。
 - 本番運用では `.env` を追跡しない構成を推奨します（例: `.env.local` を使用し `.gitignore` に追加）。
 - 実キーはコミット/共有しないでください。必要に応じて定期的なキーのローテーションを行ってください。
+
+### 緊急手順: 秘密情報がリポジトリ内で発見された場合（簡易ガイド）
+
+1. ローカルで該当ファイル（例: `*.json`, `.env` 等）を速やかに退避し、リポジトリから削除してコミットします（例: `git rm --cached` 等で履歴に残さないコミットを行う）。
+2. 直ちに対象キー/資格情報をローテーション（無効化・再発行）してください。Google サービスアカウント鍵であれば Cloud Console で鍵を削除してください。
+3. 既にリモートへ公開されている場合はチームで対応方針を決め、必要であれば履歴の抹消（`git-filter-repo` / BFG など）を検討してください。履歴書き換えはチーム合意の上で実施してください。
+4. 再発防止策として、`.gitignore` に該当パターン（`.env`, `*.json`, `gen-lang-client-*.json` 等）を追加し、Secret scanning や CI による検出ルールを導入することを推奨します。
+
+（注）上記はドキュメント上の簡易手順です。実作業をこちらで行う場合は事前に承認をお願いします。
 
 ---
 

@@ -21,7 +21,7 @@ Note:
 ## 1. Prerequisites
 
 - Python 3.10+ (tested on CPython 3.10/3.11)
-- `virtualenv` or `python -m venv` for dependency isolation (this document uses `.venv` as the virtualenv name; if you prefer a Python 3.11-specific env you may use `.venv311`).
+- Use Python 3.11 and create the virtual environment named `.venv311`.
 - Audio loopback from Zoom/Meet into the local machine (VB-Audio, VoiceMeeter, BlackHole, JACK)
 - Speechmatics account with realtime entitlement and API key
 - Zoom host privileges to obtain the Closed Caption POST URL (or Recall.ai/Meeting SDK)
@@ -38,11 +38,11 @@ Optional:
 ```bash
 git clone git@github.com:Takatakatake/esperanto_onsei_mojiokosi.git
 cd esperanto_onsei_mojiokosi
-python -m venv .venv
-source .venv/bin/activate
+python3.11 -m venv .venv311
+source .venv311/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
-# The repo includes a masked template file ` .env.example` for convenience.
+# The repo includes a masked template file `.env.example` for convenience.
 # Do not commit real secrets. If you do not have a `.env`, copy from the example and edit:
 test -f .env || cp .env.example .env
 ```
@@ -51,8 +51,8 @@ Edit these fields (example):
 
 ```ini
 SPEECHMATICS_API_KEY=****************************   # replace with your real key
-SPEECHMATICS_CONNECTION_URL=wss://eu2.rt.speechmatics.com/v2   # region base URL (e.g. eu2 / us2)
-SPEECHMATICS_LANGUAGE=eo                                     # specify language separately (the implementation will append a language suffix to the base URL)
+SPEECHMATICS_CONNECTION_URL=wss://<region>.rt.speechmatics.com/v2   # region base URL form (e.g. eu2 or us2)
+SPEECHMATICS_LANGUAGE=eo                                     # language code (e.g. eo). The actual connection will be to <base>/v2/<language> (e.g. wss://eu2.rt.speechmatics.com/v2/eo).
 AUDIO_DEVICE_INDEX=8                               # from --list-devices
 WEB_UI_ENABLED=true
 TRANSLATION_ENABLED=true
@@ -74,8 +74,8 @@ Open the Web UI at `http://127.0.0.1:8765` (set `WEB_UI_OPEN_BROWSER=true` to au
 
 ```bash
 cd /media/yamada/SSD-PUTA1/CODEX作業用202510
-python -m venv .venv
-source .venv/bin/activate
+python3.11 -m venv .venv311
+source .venv311/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
 # A masked `.env` ships with the repo. Only copy from example if missing:
@@ -220,7 +220,7 @@ Keep the Web UI on a fixed port (8765) and avoid “already in use” loops with
 
 ```bash
 install -Dm755 scripts/run_transcriber.sh ~/bin/run-transcriber.sh
-source /media/yamada/SSD-PUTA1/CODEX作業用202510/.venv/bin/activate
+source /media/yamada/SSD-PUTA1/CODEX作業用202510/.venv311/bin/activate
 ~/bin/run-transcriber.sh              # defaults: backend=speechmatics, log-level=INFO
 ```
 
@@ -236,7 +236,7 @@ Prefer manual runs? Use the prep script once per run:
 
 ```bash
 install -Dm755 scripts/prep_webui.sh ~/bin/prep-webui.sh
-source /media/yamada/SSD-PUTA1/CODEX作業用202510/.venv/bin/activate
+source /media/yamada/SSD-PUTA1/CODEX作業用202510/.venv311/bin/activate
 ~/bin/prep-webui.sh && python -m transcriber.cli --backend=speechmatics --log-level=INFO
 ```
 
@@ -340,3 +340,12 @@ python -m pip install --upgrade pip setuptools wheel
 - This repo tracks a masked `.env` to make setup easier. Replace placeholders with real values locally.
 - For production, do not track real secrets in `.env`. Prefer an untracked variant (e.g., `.env.local`) and add it to `.gitignore`.
 - Never commit or share real keys; rotate credentials regularly.
+
+### Emergency steps if secrets are discovered in the repository (quick guide)
+
+1. Locally, move the sensitive file(s) (e.g. `*.json`, `.env`) to a safe location and remove them from the repository with a commit that deletes the file (e.g. `git rm --cached <file>` to avoid re-adding to history in the next commit).
+2. Immediately rotate/disable the exposed credentials. For Google service accounts, delete the compromised key in the Cloud Console.
+3. If the secret was pushed to a remote (e.g. GitHub), coordinate with your team to consider history rewriting (using `git-filter-repo` / BFG) and follow your organization notification policy. History rewrites must be done carefully.
+4. Prevent recurrence: add patterns to `.gitignore` (`.env`, `*.json`, `gen-lang-client-*.json`), enable secret scanning in your repo hosting service, and add CI checks where possible.
+
+Note: This document only describes the steps. Do not perform these operations without team agreement and proper backups.
