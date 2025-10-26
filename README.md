@@ -1,34 +1,34 @@
-# Esperanto Realtime Transcription
+# エスペラント リアルタイム文字起こし
 
-日本語版 README は `README_ja.md` をご覧ください。
+English version: see `README_en.md`
 
-Realtime transcription pipeline tailored for Esperanto conversations on Zoom and Google Meet.  
-The implementation follows the design principles captured in *エスペラント（Esperanto）会話を“常時・高精度・低遅延”に文字起こしするための実現案1.md*:
+Zoom や Google Meet でのエスペラント会話を、低遅延でリアルタイム文字起こしするためのパイプライン実装です。
+本リポジトリの設計は「エスペラント（Esperanto）会話を“常時・高精度・低遅延”に文字起こしするための実現案1.md」に基づいています。
 
-- Speechmatics Realtime STT (official `eo` support, talker diarization, custom dictionary hooks)
-- Vosk offline backend as a zero-cost / air-gapped fallback
-- Zoom Closed Caption API injection for native on-screen subtitles
-- Pipeline abstraction ready for additional engines (e.g., Whisper streaming, Google STT)
-- Browser-based caption board with optional Japanese/Korean translations and Discord webhook batching
+- Speechmatics Realtime STT（エスペラント `eo` 対応、話者分離、カスタム辞書）
+- Vosk オフラインバックエンド（ゼロコスト/隔離環境のバックアップ）
+- Zoom Closed Caption API への送出（Zoom 画面にネイティブ字幕を表示）
+- Whisper/Google STT 等の追加エンジンにも拡張しやすいパイプライン設計
+- ブラウザ表示の字幕ボード（日本語/韓国語などへの翻訳表示、Discord 連携のバッチ投稿対応）
 
-> ⚠️ Speechmatics and Zoom endpoints require valid credentials and meeting-level permissions.  
-> Keep participants informed about live transcription to comply with privacy & platform policies.
+注意:
+- Speechmatics と Zoom の各 API には有効な資格情報と会議側の権限が必要です。
+- プライバシー/プラットフォームポリシー順守のため、参加者には文字起こし実施を必ず周知してください。
 
 ---
 
-## 1. Prerequisites
+## 1. 前提条件（Prerequisites）
 
-- Python 3.10+ (tested with CPython 3.10/3.11)
-- `virtualenv` or `uv` for dependency isolation
-- Audio route from Zoom/Meet into the local machine (e.g. VB-Audio, VoiceMeeter, BlackHole, JACK)
-- Speechmatics account with realtime entitlement and API key (when using the cloud backend)
-- Zoom host privileges to obtain the Closed Caption POST URL (or use Recall.ai/Meeting SDK for media access)
+- Python 3.10 以上（CPython 3.10/3.11 で検証）
+- 依存を隔離するための `virtualenv` もしくは `uv`
+- 会議アプリの音声を PC 内へループバックする仕組み（VB-Audio/VoiceMeeter/BlackHole/JACK など）
+- Speechmatics アカウント（Realtime の利用権限と API キー）
+- Zoom で CC（字幕）URL を取得できるホスト権限（または Recall.ai/Meeting SDK 等でメディア取得）
 
-Optional:
-
-- GPU or high-performance CPU if you plan to run the Whisper backend (recommended: RTX 4070+ or Apple M2 Pro+)
-- Google Meet Media API (developer preview) for direct audio capture when available
-- Vosk Esperanto model (`vosk-model-small-eo-0.42` or later) if you plan to run fully offline
+任意:
+- Whisper バックエンドを使う場合は GPU か高性能 CPU（例: RTX 4070+ または Apple M2 Pro+）
+- Google Meet Media API（プレビュー）による直接キャプチャが利用可能なら設定
+- 完全オフライン運用向けに Vosk Esperanto モデル（`vosk-model-small-eo-0.42` 以上）
 
 ---
 
@@ -41,13 +41,13 @@ python -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
-# リポジトリには伏せ字入りの `.env` を同梱しています（安全な雛形）。
-# 既に `.env` がある場合は開いて値を置き換えてください。
-# 無い場合は例からコピーして編集します：
+# リポジトリには伏せ字入りの `.env` を同梱しています（安全な雛形）
+# 既に `.env` がある場合は開いて値を置き換えてください
+# 無い場合は例からコピーして編集:
 test -f .env || cp .env.example .env
 ```
 
-編集ポイント（例）：
+`.env` の主な編集ポイント（例）:
 
 ```ini
 SPEECHMATICS_API_KEY=****************************   # 本物のキーに置換
@@ -58,7 +58,7 @@ TRANSLATION_ENABLED=true
 TRANSLATION_TARGETS=ja,ko
 ```
 
-その後、デバイス確認と起動：
+デバイス確認と起動:
 
 ```bash
 python -m transcriber.cli --list-devices
@@ -69,7 +69,7 @@ Web UI は `http://127.0.0.1:8765` で開けます（`.env` の `WEB_UI_OPEN_BRO
 
 ---
 
-## 2. Bootstrap
+## 2. セットアップ（Bootstrap）
 
 ```bash
 cd /media/yamada/SSD-PUTA1/CODEX作業用202510
@@ -77,31 +77,31 @@ python -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
-# `.env` は本リポジトリに同梱（伏せ字）されています。無い場合のみコピー：
+# `.env` は本リポジトリに同梱（伏せ字）されています。無い場合のみコピー:
 test -f .env || cp .env.example .env
 ```
 
-Edit `.env` (サンプルは伏せ字。実値に置換してください):
+`.env` を編集（サンプルの伏せ字を実値に置換）:
 
 ```ini
 TRANSCRIPTION_BACKEND=speechmatics  # or vosk / whisper
 SPEECHMATICS_API_KEY=sk_live_************************
 SPEECHMATICS_APP_ID=realtime
 SPEECHMATICS_LANGUAGE=eo
-ZOOM_CC_POST_URL=https://wmcc.zoom.us/closedcaption?... (host-provided URL)
+ZOOM_CC_POST_URL=https://wmcc.zoom.us/closedcaption?...  # ホストが提供する URL
 ```
 
-Optional overrides (all values can be left unset if you stick with defaults):
+任意設定（デフォルトのままでも可）:
 
 ```ini
-AUDIO_DEVICE_INDEX=8            # from --list-devices output
+AUDIO_DEVICE_INDEX=8            # --list-devices の番号
 AUDIO_SAMPLE_RATE=16000
 AUDIO_CHUNK_DURATION_SECONDS=0.5
 ZOOM_CC_MIN_POST_INTERVAL_SECONDS=1.0
 VOSK_MODEL_PATH=/absolute/path/to/vosk-model-small-eo-0.42
 WHISPER_MODEL_SIZE=medium
-WHISPER_DEVICE=auto              # e.g. cuda, cpu, mps
-WHISPER_COMPUTE_TYPE=default     # e.g. float16 (for GPU)
+WHISPER_DEVICE=auto              # cuda / cpu / mps
+WHISPER_COMPUTE_TYPE=default     # 例: float16（GPU）
 WHISPER_SEGMENT_DURATION=6.0
 WHISPER_BEAM_SIZE=1
 TRANSCRIPT_LOG_PATH=logs/esperanto-caption.log
@@ -113,7 +113,7 @@ TRANSLATION_TARGETS=ja,ko
 TRANSLATION_TIMEOUT_SECONDS=8.0
 GOOGLE_TRANSLATE_CREDENTIALS_PATH=/absolute/path/to/gen-lang-client-xxxx.json
 GOOGLE_TRANSLATE_MODEL=nmt
-# (API キー派生の場合は GOOGLE_TRANSLATE_API_KEY=... を設定)
+# API キー派生を使う場合は GOOGLE_TRANSLATE_API_KEY=...
 DISCORD_WEBHOOK_ENABLED=true
 DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
 DISCORD_BATCH_FLUSH_INTERVAL=2.0
@@ -122,110 +122,102 @@ DISCORD_BATCH_MAX_CHARS=350
 
 ---
 
-## 3. Usage
+## 3. 使い方（Usage）
 
-List capture devices and verify routing:
+- 入力デバイスの一覧とルーティング確認:
+  ```bash
+  python -m transcriber.cli --list-devices
+  ```
 
-```bash
-python -m transcriber.cli --list-devices
-```
+- パイプライン起動（確定文を標準出力へ、Zoom に確定文を送出）:
+  ```bash
+  python -m transcriber.cli --log-level=INFO
+  ```
 
-Start the pipeline (prints finals to stdout, pushes finals to Zoom):
+- `WEB_UI_ENABLED=true` のとき、簡易字幕ボードが `http://127.0.0.1:8765` で起動します。最新の確定文と、言語ごとのトグル（例: 日本語/韓国語）で翻訳を表示できます。
+- Discord Webhook を設定すると、確定文を自然な文単位でまとめ、エスペラント原文と各翻訳を 1 つのメッセージにして投稿します。
 
-```bash
-python -m transcriber.cli --log-level=INFO
-```
+- バックエンドやログ出力の一時変更:
+  ```bash
+  python -m transcriber.cli --backend=vosk --log-file=logs/offline.log
+  python -m transcriber.cli --backend=whisper --log-level=DEBUG
+  ```
 
-- With `WEB_UI_ENABLED=true` the lightweight caption board runs on `http://127.0.0.1:8765`. It displays the latest final transcript plus optional translations with per-language toggles (e.g. Japanese / Korean).
-- When a Discord webhook URL is configured the pipeline batches finals into natural sentences and posts a single message containing the Esperanto line and all enabled translations.
+- 翻訳スモークテスト（現在の `.env` を使用）:
+  ```bash
+  scripts/test_translation.py "Bonvenon al nia kunsido."
+  ```
 
-Switch backends or override log output on demand:
+停止は `Ctrl+C`。ログには以下が出ます:
+- `Final:` 行（Speechmatics が確定セグメントを出したタイミング）
+- Zoom への POST 成否（401/403 はトークン期限切れや会議未準備の可能性）
+- Transcript ログを有効化している場合は、確定ごとにタイムスタンプ付きで追記
 
-```bash
-python -m transcriber.cli --backend=vosk --log-file=logs/offline.log
-python -m transcriber.cli --backend=whisper --log-level=DEBUG
-```
+Zoom 固有の手順:
+1. ホストが会議で Live Transcription を許可し、Closed Caption API URL を取得
+2. その URL を `.env` の `ZOOM_CC_POST_URL` に貼り付けるか、`export ZOOM_CC_POST_URL=...` で起動時に設定
+3. 参加者が Zoom UI で字幕を有効化（通常のネットワークで E2E 約 1 秒）
 
-- Translation smoke test (uses current `.env` settings):
-
-```bash
-scripts/test_translation.py "Bonvenon al nia kunsido."
-```
-
-Stopping with `Ctrl+C` sends a graceful shutdown signal. Logs show:
-
-- `Final:` lines once Speechmatics emits confirmed segments
-- Caption POST success/failure (watch for 401/403 → token expired or meeting not ready)
-- When transcript logging is enabled, the log file receives timestamped lines for each confirmed utterance.
-
-Zoom-specific steps (per the proposal):
-
-1. Host joins the meeting, enables **Allow participants to request Live Transcription** and copies the Closed Caption API URL.
-2. Paste the URL into `.env` or set `ZOOM_CC_POST_URL` at runtime (`export ZOOM_CC_POST_URL=...`).
-3. Participants enable subtitles in the Zoom UI. Timing is ~1 s end-to-end in normal network conditions.
-
-Google Meet options:
-
-- **Meet Media API (preview)**: swap the audio frontend to consume the REST/WS media stream, then feed PCM into the same Speechmatics client.
-- **Screen overlay**: run this pipeline locally, render the transcript in a floating window (future work) and share it via Meet Companion mode.
+Google Meet の選択肢:
+- Meet Media API（プレビュー）が使える場合は、そのストリームを PCM に変換して同じ Speechmatics クライアントに供給
+- 現状は OS の仮想ループバック（PipeWire/BlackHole/VoiceMeeter 等）で安定運用可能
 
 ---
 
-## 4. Architecture Notes
+## 4. アーキテクチャ概要
 
-- `transcriber/audio.py`: pulls `int16` PCM frames from the chosen device at 16 kHz (configurable).  
-- `transcriber/asr/speechmatics_backend.py`: realtime WebSocket client (`Authorization: Bearer <API key>`) streaming PCM and parsing partial/final JSON with diarization metadata.  
-- `transcriber/asr/whisper_backend.py`: chunked realtime transcription using faster-whisper (GPU/M-series friendly).  
-- `transcriber/asr/vosk_backend.py`: lightweight offline recognizer built on Vosk/Kaldi for zero-cost fallback.  
-- `transcriber/pipeline.py`: orchestrates audio capture, chosen backend, transcript logging, and caption delivery.  
-- `transcriber/zoom_caption.py`: throttled POSTs (`text/plain`, `seq` parameter) to Zoom’s Closed Caption API.  
-- `transcriber/translate/service.py`: async translation client (LibreTranslate-compatible) used to enrich Web UI/Discord outputs.  
-- `transcriber/discord/batcher.py`: debounce/aggregate Discord webhook posts and align them with translated text.  
-- `transcriber/cli.py`: CLI helpers for device discovery, config inspection, backend override, and graceful shutdown.
+- `transcriber/audio.py`: 16 kHz モノラルの PCM16 を非同期で取得
+- `transcriber/asr/speechmatics_backend.py`: Realtime WebSocket クライアント（Bearer JWT、部分/確定を JSON 受信）
+- `transcriber/asr/whisper_backend.py`: faster-whisper によるストリーミング認識（GPU/Mシリーズ向け）
+- `transcriber/asr/vosk_backend.py`: Vosk/Kaldi ベースの軽量オフライン認識
+- `transcriber/pipeline.py`: 入力→ASR→ログ/Zoom/翻訳/Web UI/Discord をオーケストレーション
+- `transcriber/zoom_caption.py`: Zoom Closed Caption API へ `text/plain` をスロットリング送出（`seq` 付与）
+- `transcriber/translate/service.py`: 非同期翻訳クライアント（LibreTranslate 互換）。Web UI/Discord の多言語出力に利用
+- `transcriber/discord/batcher.py`: Discord への投稿をデバウンス/集約して自然な文単位に整形
+- `transcriber/cli.py`: デバイス列挙、設定表示、バックエンド切替、グレースフルシャットダウン
 
-Anticipated extensions (mirroring the proposal’s roadmap):
-
-- Additional transcription backends (Whisper streaming, Google STT) via the same interface
-- Post-processing pipeline (Esperanto diacritics normalisation, punctuation refinements)
-- Observer hooks for on-screen display, translation, persistence
-
----
-
-## 5. Next Steps & Validation
-
-1. Validate Speechmatics handshake: confirm `start` payload matches your tenant’s latest schema (see Docs §Real-time Quickstart). Adjust `transcription_config` as needed (custom dictionary, `operating_point`, etc.).  
-2. Run a dry rehearsal with recorded Esperanto audio: measure WER, diarization accuracy, delay. Use logs to capture `raw` payloads for tuning.  
-3. Register frequent Esperanto-specific words in the Speechmatics Custom Dictionary (Docs §4) and mirror the same lexicon for Vosk post-processing if required.  
-4. Validate the offline path: download the Vosk Esperanto model, run `python -m transcriber.cli --backend=vosk`, and compare WER/latency vs Speechmatics.  
-5. Benchmark the Whisper backend on your hardware (`python -m transcriber.cli --backend=whisper`) to understand GPU/CPU load and tune `WHISPER_SEGMENT_DURATION`.  
-6. When scaling to production, wrap the CLI with a supervisor (systemd, pm2) and add persistent logging/metrics as emphasised in the guidelines.  
-7. Document participant consent workflow; automate “transcription active” notifications inside meeting invites.
-8. Test the translation pipeline end-to-end: set `TRANSLATION_TARGETS=ja,ko`, confirm Google Cloud Translation（or LibreTranslate）responds quickly, and verify that Web UI toggles/Discord posts include the expected bilingual lines.
-   - Google Cloud Translationを使う場合は `TRANSLATION_PROVIDER=google`、`GOOGLE_TRANSLATE_CREDENTIALS_PATH=/path/to/service-account.json` または `GOOGLE_TRANSLATE_API_KEY` を設定し、必要なら `GOOGLE_TRANSLATE_MODEL=nmt` などを指定します。サービスアカウントには Cloud Translation API の権限を付与してください。
-
-For questions on alternate capture paths (Recall.ai bots, Meet Media API wrappers, Whisper fallback) reuse the abstractions in `audio.py` and `transcriber/asr/`—new producers/consumers slot in without touching the pipeline control logic.
+拡張予定:
+- Whisper ストリーミング、Google STT などの追加バックエンド
+- 後処理（エスペラントのダイアクリティカル、句読点の整形）
+- 画面表示/翻訳/永続化のためのオブザーバーフック
 
 ---
 
-## 7. Recommended Launch Workflow
+## 5. 検証と次のステップ（Validation）
 
-To keep the Web UI on a fixed port (8765) and avoid “already in use” loops, a tiny launcher is provided:
+1. Speechmatics のハンドシェイクを検証（`start` ペイロードが最新スキーマに一致すること）。辞書/`operating_point` 等は必要に応じて調整
+2. 録音済みのエスペラント音声でドライリハーサル（WER、話者分離、遅延を測定）
+3. 頻出語や固有名詞を Speechmatics の Custom Dictionary に登録。Vosk の後処理にも同語彙を反映
+4. オフライン経路を検証（Vosk モデルを用意して `--backend=vosk` で比較）
+5. Whisper バックエンドのベンチマークを実施し、ハードウェアごとに `WHISPER_SEGMENT_DURATION` を調整
+6. 運用規模拡大時は systemd/pm2 等で常駐化し、永続ログ/メトリクスを整備
+7. 参加者同意のワークフローを明文化し、招待メール等で「文字起こし有効」を自動周知
+8. 翻訳パイプラインの E2E テスト（`TRANSLATION_TARGETS=ja,ko`、Google Cloud Translation または LibreTranslate の応答確認、Web UI/Discord に二言語が出ることを確認）。
+   - Google Cloud Translation を使う場合は `TRANSLATION_PROVIDER=google`、`GOOGLE_TRANSLATE_CREDENTIALS_PATH=/path/to/service-account.json` または `GOOGLE_TRANSLATE_API_KEY` を設定。必要なら `GOOGLE_TRANSLATE_MODEL=nmt` を指定。サービスアカウントに Cloud Translation API 権限が必要です。
+
+補足: Recall.ai/Meet Media API/Whisper 代替経路などは、`audio.py` と `transcriber/asr/` の抽象を再利用することで、制御ロジックを変えずに差し替え可能です。
+
+---
+
+## 7. 推奨起動ワークフロー（固定ポート 8765）
+
+Web UI を常に `8765` で起動し「ポート占有」問題を避けるためのランチャーを同梱:
 
 ```bash
 install -Dm755 scripts/run_transcriber.sh ~/bin/run-transcriber.sh
 source /media/yamada/SSD-PUTA1/CODEX作業用202510/.venv311/bin/activate
-~/bin/run-transcriber.sh              # defaults to backend=speechmatics, log-level=INFO
+~/bin/run-transcriber.sh              # backend=speechmatics, log-level=INFO
 ```
 
-`run_transcriber.sh` closes stale listeners on the selected port (default 8765), waits for the socket to truly free, and then starts `python -m transcriber.cli`. The browser always connects to `http://127.0.0.1:8765` and translations (Google ja/ko) show up immediately.
+`run_transcriber.sh` は選択ポート（既定 8765）の LISTEN を掃除してから `python -m transcriber.cli` を起動します。ブラウザは常に `http://127.0.0.1:8765` に接続でき、翻訳（Google: ja/ko）もすぐ表示されます。
 
-Need a different port or backend? Override via environment variables:
+別ポートや別バックエンドを使う例:
 
 ```bash
 PORT=8766 LOG_LEVEL=DEBUG BACKEND=whisper ~/bin/run-transcriber.sh
 ```
 
-Prefer to keep manually running `python -m transcriber.cli`? Use the prep script once per run:
+手動で `python -m transcriber.cli` を叩きたい場合は、1 回だけ準備スクリプトを使うと安定:
 
 ```bash
 install -Dm755 scripts/prep_webui.sh ~/bin/prep-webui.sh
@@ -233,9 +225,9 @@ source /media/yamada/SSD-PUTA1/CODEX作業用202510/.venv311/bin/activate
 ~/bin/prep-webui.sh && python -m transcriber.cli --backend=speechmatics --log-level=INFO
 ```
 
-`prep-webui.sh` terminates lingering CLI processes, frees port 8765, and waits until it is available so the subsequent CLI command binds that port on the first try.
+`prep-webui.sh` は 8765 の LISTEN を確実に解放してからコマンドを返すため、直後の `python -m ...` が一発でバインドできます。
 
-8765 を完全に空にしたいときは、以下 3 行を続けて実行してください（Chrome の Network Service などが掴んでいても強制的に開放します）:
+どうしても 8765 が開放されない場合は、以下の 3 行で強制的にリセット可能です（Chrome の Network Service などが掴んでいる場合も含む）。
 
 ```bash
 pkill -f "python -m transcriber.cli" || true
@@ -243,79 +235,90 @@ lsof -t -iTCP:8765 | xargs -r kill -9 || true
 sleep 0.5 && lsof -iTCP:8765    # 何も出なければOK
 ```
 
-その後、必要なら通常どおり `python -m transcriber.cli ...` を再起動してください。
+その後、通常どおり `python -m transcriber.cli ...` を再起動してください。
 
 ---
 
-## 8. Audio Loopback Stability
+## 8. ループバック安定性（PipeWire/WirePlumber）
 
-PipeWire/WirePlumber occasionally revert the default input to a hardware mic, which breaks Meet loopback capture. To lock the defaults and auto-heal if the state files change, follow `docs/audio_loopback.md`:
+PipeWire/WirePlumber が既定入力を物理マイクに戻してしまうと、Meet ループバックが無音になります。既定を固定し、状態ファイル変更にも自動復旧するには `docs/audio_loopback.md` を参照:
 
 ```bash
 install -Dm755 scripts/wp-force-monitor.sh ~/bin/wp-force-monitor.sh
-~/bin/wp-force-monitor.sh                           # once, forces analog monitor
+~/bin/wp-force-monitor.sh                           # 初回: アナログ monitor を強制
 cp systemd/wp-force-monitor.{service,path} ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now wp-force-monitor.service wp-force-monitor.path
 ```
 
-`wp-force-monitor` keeps the default source on `alsa_output...analog-stereo.monitor` so Discord/Speechmatics always hear the Meet loopback, while leaving the sink under user control unless `SINK_NAME=...` is provided.
+`wp-force-monitor` は既定ソースを `alsa_output...analog-stereo.monitor` に固定します（Discord/Speechmatics が常に Meet ループバックを聴ける）。`SINK_NAME=...` を渡さない限り既定シンクはユーザー操作で可変です。
 
 ---
 
-## 6. Audio Device Hot-Reload (Ubuntu/Linux)
+## 6. オーディオデバイスのホットリロード（Ubuntu/Linux）
 
-The application includes automatic audio device change detection and reconnection to handle system-level device switching without interrupting the transcription pipeline.
+OS 側のデバイス切替でパイプラインが中断されないよう、デバイス変更の自動検知・再接続を実装しています。
 
-### Features
+### 特徴
+- 自動監視: 既定入力デバイスを 2 秒ごとにチェック（調整可能）
+- シームレス再接続: 切替検知時に自動的に新デバイスへ再接続
+- ヘルスチェック: 音声ストリームが無音/停止したら 5 秒で検知しリスタート
+- エラー回復: 例外発生時もリトライで自動復旧
 
-- **Automatic Device Monitoring**: Checks default input device every 2 seconds (configurable)
-- **Seamless Reconnection**: Automatically reconnects to the new device when changed
-- **Health Checks**: Detects when the audio stream stops receiving data (5-second timeout) and automatically restarts
-- **Error Recovery**: Automatically recovers from stream errors with retry logic
-
-### Configuration
-
-Add to `.env` to customize the monitoring interval:
-
+### 設定
+`.env` に以下を追加して監視間隔を変更:
 ```ini
-AUDIO_DEVICE_CHECK_INTERVAL=2.0  # seconds between device checks (default: 2.0)
+AUDIO_DEVICE_CHECK_INTERVAL=2.0  # デフォルト 2.0 秒
 ```
 
-### Diagnostics
-
-Run the audio device diagnostic tool to see all available devices:
-
+### 診断
+すべてのデバイスを確認する診断ツール:
 ```bash
 python3 scripts/diagnose_audio.py
 ```
+表示内容:
+- 利用可能な入出力デバイス一覧
+- 現在の既定デバイス
+- 設定に使うデバイス番号
+- ループバック構成の推奨
 
-This will show:
-- All available audio input/output devices
-- Current default devices
-- Device indices for configuration
-- Recommendations for loopback setup
+### よくある問題（Ubuntu/PulseAudio）
+- 問題: システム設定で出力デバイスを切り替えると無音になる
+  - 原因: PulseAudio/PipeWire のルーティングに影響
+  - 解決: 2〜5 秒で自動再接続。恒久化したい場合は以下を追加:
+    ```bash
+    pactl load-module module-loopback latency_msec=1
+    ```
+- 問題: 再接続が頻発する
+  - 解決: 監視間隔を延ばす／特定デバイスを固定
+    ```ini
+    AUDIO_DEVICE_CHECK_INTERVAL=5.0
+    # diagnose_audio.py の結果を見てデバイス固定
+    AUDIO_DEVICE_INDEX=8
+    ```
 
-### Common Issues (Ubuntu/PulseAudio)
+詳細は `docs/ubuntu_audio_troubleshooting.md` を参照してください。
 
-**Problem**: Audio stops when switching output devices in system settings
+---
 
-**Cause**: Output device switching can affect loopback routing in PulseAudio/PipeWire
+## 付録 A: ポート 8765 を完全解放する 3 行
 
-**Solution**:
-1. The application will automatically reconnect within 2-5 seconds
-2. For persistent loopback, add to PulseAudio config:
-   ```bash
-   pactl load-module module-loopback latency_msec=1
-   ```
-
-**Problem**: Frequent reconnections
-
-**Solution**: Increase check interval or pin to a specific device:
-```ini
-AUDIO_DEVICE_CHECK_INTERVAL=5.0
-# Or pin to a specific device (see diagnose_audio.py output)
-AUDIO_DEVICE_INDEX=8
+Chrome の Network Service 等が掴んでいても確実に 8765 を空にします:
+```bash
+pkill -f "python -m transcriber.cli" || true
+lsof -t -iTCP:8765 | xargs -r kill -9 || true
+sleep 0.5 && lsof -iTCP:8765    # 何も出なければOK
 ```
+実行後、通常どおり `python -m transcriber.cli ...` を再起動してください。
 
-For detailed troubleshooting, see [docs/ubuntu_audio_troubleshooting.md](docs/ubuntu_audio_troubleshooting.md).
+---
+
+## 付録 B: セキュリティと .env の取り扱い
+
+- 本リポジトリには学習/再現容易性のため、伏せ字入りの `.env` を「追跡」しています（実値は空欄や `*`）。
+- 本番運用では `.env` を追跡しない構成を推奨します（例: `.env.local` を使用し `.gitignore` に追加）。
+- 実キーはコミット/共有しないでください。必要に応じて定期的なキーのローテーションを行ってください。
+
+---
+
+日本語版 README は継続的に更新します。英語版（`README_en.md`）の差分が出た場合は、本ファイルへの反映をご連絡ください。
