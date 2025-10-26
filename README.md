@@ -19,8 +19,8 @@ Zoom や Google Meet でのエスペラント会話を、低遅延でリアル�
 
 ## 1. 前提条件（Prerequisites）
 
-- Python 3.10 以上（CPython 3.10/3.11 で検証）
-- 依存を隔離するための `virtualenv` もしくは `uv`
+ - Python 3.10 以上（CPython 3.10/3.11 で検証）
+ - 依存を隔離するために `virtualenv` または `python -m venv` を利用してください（本ドキュメントでは仮想環境名を `.venv` とします。Python 3.11 固有の環境名を使いたい場合は `.venv311` としてください）。
 - 会議アプリの音声を PC 内へループバックする仕組み（VB-Audio/VoiceMeeter/BlackHole/JACK など）
 - Speechmatics アカウント（Realtime の利用権限と API キー）
 - Zoom で CC（字幕）URL を取得できるホスト権限（または Recall.ai/Meeting SDK 等でメディア取得）
@@ -41,7 +41,8 @@ python -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
-# リポジトリには伏せ字入りの `.env` を同梱しています（安全な雛形）
+# リポジトリには伏せ字入りのテンプレート ` .env.example` を同梱しています（安全な雛形）。
+# 実運用では `cp .env.example .env` のうえで実値を設定してください。実値を含む `.env` は絶対にコミットしないでください（`.gitignore` に追加することを推奨します）。
 # 既に `.env` がある場合は開いて値を置き換えてください
 # 無い場合は例からコピーして編集:
 test -f .env || cp .env.example .env
@@ -51,7 +52,8 @@ test -f .env || cp .env.example .env
 
 ```ini
 SPEECHMATICS_API_KEY=****************************   # 本物のキーに置換
-SPEECHMATICS_CONNECTION_URL=wss://eu2.rt.speechmatics.com/v2
+SPEECHMATICS_CONNECTION_URL=wss://eu2.rt.speechmatics.com/v2   # リージョンを含む base URL を指定（例: eu2 / us2）
+SPEECHMATICS_LANGUAGE=eo                                     # 言語は別途指定（実装は base URL に言語サフィックスを付加して接続します）
 AUDIO_DEVICE_INDEX=8                               # --list-devices の番号
 WEB_UI_ENABLED=true
 TRANSLATION_ENABLED=true
@@ -77,7 +79,7 @@ python -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
-# `.env` は本リポジトリに同梱（伏せ字）されています。無い場合のみコピー:
+# `.env` はテンプレート ` .env.example` を同梱しています。実運用では `cp .env.example .env` の上で実値を設定してください。
 test -f .env || cp .env.example .env
 ```
 
@@ -112,6 +114,9 @@ TRANSLATION_SOURCE_LANGUAGE=eo
 TRANSLATION_TARGETS=ja,ko
 TRANSLATION_TIMEOUT_SECONDS=8.0
 TRANSLATION_DEFAULT_VISIBILITY=ja:on,ko:off
+# Google Cloud Translation service account JSON (do NOT commit to repo).
+# Instead prefer setting the file path in the environment variable
+# `GOOGLE_APPLICATION_CREDENTIALS` or keep the JSON outside the repository and reference it via an absolute path.
 GOOGLE_TRANSLATE_CREDENTIALS_PATH=/absolute/path/to/gen-lang-client-xxxx.json
 GOOGLE_TRANSLATE_MODEL=nmt
 # API キー派生を使う場合は GOOGLE_TRANSLATE_API_KEY=...
@@ -215,7 +220,7 @@ Web UI を常に `8765` で起動し「ポート占有」問題を避けるた�
 
 ```bash
 install -Dm755 scripts/run_transcriber.sh ~/bin/run-transcriber.sh
-source /media/yamada/SSD-PUTA1/CODEX作業用202510/.venv311/bin/activate
+source /media/yamada/SSD-PUTA1/CODEX作業用202510/.venv/bin/activate
 ~/bin/run-transcriber.sh              # backend=speechmatics, log-level=INFO
 ```
 
@@ -231,7 +236,7 @@ PORT=8766 LOG_LEVEL=DEBUG BACKEND=whisper ~/bin/run-transcriber.sh
 
 ```bash
 install -Dm755 scripts/prep_webui.sh ~/bin/prep-webui.sh
-source /media/yamada/SSD-PUTA1/CODEX作業用202510/.venv311/bin/activate
+source /media/yamada/SSD-PUTA1/CODEX作業用202510/.venv/bin/activate
 ~/bin/prep-webui.sh && python -m transcriber.cli --backend=speechmatics --log-level=INFO
 ```
 
@@ -240,9 +245,13 @@ source /media/yamada/SSD-PUTA1/CODEX作業用202510/.venv311/bin/activate
 どうしても 8765 が開放されない場合は、以下の 3 行で強制的にリセット可能です（Chrome の Network Service などが掴んでいる場合も含む）。
 
 ```bash
+# まずは穏やかにプロセスを終了する方法を試してください（強制終了は副作用があるため注意）。
 pkill -f "python -m transcriber.cli" || true
-lsof -t -iTCP:8765 | xargs -r kill -9 || true
-sleep 0.5 && lsof -iTCP:8765    # 何も出なければOK
+sleep 0.2
+# SIGTERM を送って穏やかに終了させます（プロセスが応答しない場合のみ次の手段を検討）。
+lsof -t -iTCP:8765 | xargs -r kill || true
+sleep 0.5 && lsof -iTCP:8765 || true
+# どうしても解放されない場合のみ、管理者と相談のうえで強制終了（kill -9）を検討してください。
 ```
 
 その後、通常どおり `python -m transcriber.cli ...` を再起動してください。
@@ -311,12 +320,39 @@ python3 scripts/diagnose_audio.py
 
 ---
 
+## システム依存パッケージ（補足）
+
+このプロジェクトは Python パッケージだけでなく、OS レベルの依存（PortAudio、libsndfile、ffmpeg 等）を必要とします。代表的なインストール例を示します（ご利用のディストリビューション/環境に合わせて調整してください）。
+
+- Debian/Ubuntu 系（参考）:
+```bash
+sudo apt update
+sudo apt install -y build-essential libsndfile1-dev libportaudio2 portaudio19-dev ffmpeg
+```
+
+- macOS（Homebrew）:
+```bash
+brew install portaudio ffmpeg libsndfile
+```
+
+- Windows: `sounddevice` のビルド済み wheel がない場合は Visual C++ ビルドツールが必要になることがあります。`ffmpeg` は https://ffmpeg.org から入手するか `choco`/scoop で導入してください。
+
+また、インストール前に Python のインストーラ周りを最新化しておくとトラブルが少ないため、以下を実行することを推奨します:
+```bash
+python -m pip install --upgrade pip setuptools wheel
+```
+
+
+---
+
 ## 付録 A: ポート 8765 を完全解放する 3 行
 
 Chrome の Network Service 等が掴んでいても確実に 8765 を空にします:
 ```bash
 pkill -f "python -m transcriber.cli" || true
-lsof -t -iTCP:8765 | xargs -r kill -9 || true
+sleep 0.2
+# try graceful termination first
+lsof -t -iTCP:8765 | xargs -r kill || true
 sleep 0.5 && lsof -iTCP:8765    # 何も出なければOK
 ```
 実行後、通常どおり `python -m transcriber.cli ...` を再起動してください。

@@ -6,57 +6,57 @@
 
 ## 1. 現状と成果物（要約）
 
-- リアルタイム文字起こしは正常稼働済み。
-  - ログ例（INFO）: `Recognition started.` の後に `Final: Ĉu vi aŭdis?` など確定文が流れる。
-- 実装の要点:
-  - Audio 取り込み: `sounddevice`（PipeWire/BlackHole/VoiceMeeter 等の仮想オーディオ入力）
-  - STT バックエンド: Speechmatics をメイン、Whisper/Vosk を切り替え可能
-  - JWT 認証: API キーからの自動 JWT 取得を実装（mp.speechmatics.com v1）
-  - Zoom CC API: 送出器あり（Meet時は無効化）
-  - ログ: `logs/meet-session.log` にタイムスタンプ付きで確定文を追記
-  - 表示: ローカル Web UI に確定文＋翻訳（日本語/韓国語など）を表示。Discord Webhook は一定文字数でバッチングし、原文＋翻訳をまとめて投稿
-
----
+- リアルタイム文字起こしは稼働済み。
+- 主要構成：音声入力(`sounddevice`) → ASR（Speechmatics メイン、Vosk/Whisper 切り替え可）→ パイプライン（ログ/Zoom/翻訳/Web UI/Discord）
+- ログ: `logs/meet-session.log` に確定文を追記
+- 翻訳: Web UI と Discord 投稿により多言語表示が可能（`TRANSLATION_TARGETS` に従う）
 
 ## 0. 最短クイックチェック（5分）
 
-1) `.venv311` を有効化 → `pip install -r requirements.txt` 済み確認。
-2) `python -m transcriber.cli --list-devices` で仮想入力デバイス番号を確認（例: pipewire = 8）。
-3) `.env` を設定：`SPEECHMATICS_API_KEY`、`SPEECHMATICS_CONNECTION_URL`（EUは `wss://eu2.rt.speechmatics.com/v2`）、`AUDIO_DEVICE_INDEX`。
-   - 本リポジトリには「伏せ字入り」の `.env` を同梱しています。実運用ではご自身の実値に置き換えてください。
-4) `python -m transcriber.cli --show-config` で `connection_url` と `audio.sample_rate=16000` を確認。
-5) `python -m transcriber.cli --backend=speechmatics --log-level=INFO` で起動。`Recognition started.` → `Final:` が出ればOK。
-6) （翻訳/共有を使う場合）`.env` に `WEB_UI_ENABLED=true`、`TRANSLATION_ENABLED=true`、`TRANSLATION_PROVIDER=google`、`TRANSLATION_TARGETS=ja,ko` 等を設定。  
-　`install -Dm755 scripts/run_transcriber.sh ~/bin/run-transcriber.sh` 後、`source .venv311/bin/activate && ~/bin/run-transcriber.sh` を実行するとポート8765を解放→起動→ブラウザを自動で開く。ログの `Caption Web UI running at http://127.0.0.1:8765` を確認し、同URLを開いて翻訳表示を確認。
+1) 仮想環境を作成して有効化（本ドキュメントでは `.venv` を推奨）:
 
----
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
+```
 
-## 2. ディレクトリと主ファイル
+2) 入力デバイスの確認:
 
-- `transcriber/` 文字起こしコア
-  - `audio.py` … PCM16 16kHz モノラルの非同期チャンク入力
-  - `pipeline.py` … Audio→ASR→出力（Zoom/ログ）をオーケストレーション
-  - `zoom_caption.py` … Zoom Closed Caption API 送信器
-  - `asr/` … バックエンド切替層
-    - `speechmatics_backend.py` … Realtime v2 WebSocket クライアント（本番）
-    - `whisper_backend.py` … faster-whisper（GPU/Mシリーズ向け）
-    - `vosk_backend.py` … Vosk（完全オフライン）
-  - `cli.py` … コマンドライン実行（デバイス列挙/設定表示/起動）
-- 設定ファイル
-  - `.env`（運用用, 秘匿）／`.env.example`（雛形）
-- ドキュメント
-  - `README.md`（セットアップ概要）
-  - 本書（詳細運用ガイド）
+```bash
+python -m transcriber.cli --list-devices
+```
+
+3) `.env` を準備: リポジトリに同梱されているテンプレート ` .env.example` をコピーして使用します（`cp .env.example .env`）。実値は絶対にコミットしないでください。
+
+4) 設定例（最低限）:
+
+```ini
+SPEECHMATICS_API_KEY=<YOUR_KEY>
+SPEECHMATICS_CONNECTION_URL=wss://eu2.rt.speechmatics.com/v2  # base URL（例: eu2 / us2）
+SPEECHMATICS_LANGUAGE=eo
+AUDIO_DEVICE_INDEX=8
+```
+
+5) 設定確認と起動:
+
+```bash
+python -m transcriber.cli --show-config
+python -m transcriber.cli --log-level=INFO
+```
+
+6) （翻訳を使う場合）`.env` に `WEB_UI_ENABLED=true`、`TRANSLATION_ENABLED=true`、`TRANSLATION_PROVIDER=google`、`TRANSLATION_TARGETS=ja,ko` を設定し、Google のサービスアカウント JSON を利用する場合は JSON をリポジトリに入れず、`GOOGLE_APPLICATION_CREDENTIALS` 環境変数などで参照することを推奨します。
 
 ---
 
 ## 3. セットアップ手順（初回）
 
 1) Python 環境
-- Python 3.11 の仮想環境を作成（本番では `.venv311` を使用）
+- Python 3.11 を使う場合の仮想環境作成（本ドキュメントでは `.venv` を推奨。必要に応じて `.venv311` を使ってください）
   ```bash
-  python3.11 -m venv .venv311
-  source .venv311/bin/activate
+  python3.11 -m venv .venv
+  source .venv/bin/activate
   pip install --upgrade pip
   pip install -r requirements.txt
   ```
@@ -96,6 +96,8 @@ TRANSCRIPT_LOG_PATH=logs/meet-session.log
   TRANSLATION_PROVIDER=google
   TRANSLATION_TARGETS=ja,ko
   TRANSLATION_DEFAULT_VISIBILITY=ja:on,ko:off
+  # Google service-account JSON: do NOT commit this file to the repository.
+  # Prefer supplying credentials via the environment variable GOOGLE_APPLICATION_CREDENTIALS
   GOOGLE_TRANSLATE_CREDENTIALS_PATH=/absolute/path/to/service-account.json
   GOOGLE_TRANSLATE_MODEL=nmt
   # 任意: GOOGLE_TRANSLATE_API_KEY=<APIキーを使う場合>
@@ -111,8 +113,8 @@ Web UI を共有するだけで良い場合は Webhook を省略可能。Webhook
   ```bash
   git clone <このリポジトリ>
   cd <クローン先>
-  scripts/bootstrap_env.sh          # .venv311 を作成し依存をインストール
-  source .venv311/bin/activate      # 有効化
+  scripts/bootstrap_env.sh          # .venv を作成し依存をインストール
+  source .venv/bin/activate      # 有効化
   cp .env.example .env && vi .env   # 設定（APIキー/リージョン/デバイス）
   ```
 
@@ -128,9 +130,31 @@ Web UI を共有するだけで良い場合は Webhook を省略可能。Webhook
   tar xzf <配布物>.tar.gz
   cd <展開先>
   scripts/offline_install.sh            # wheelhouse から依存をインストール
-  source .venv311/bin/activate
+  source .venv/bin/activate
   cp .env.example .env && vi .env
   ```
+
+## システム依存パッケージ（補足）
+
+本プロジェクトは Python パッケージの他に PortAudio / libsndfile / ffmpeg 等の OS レベルの依存が必要です。代表的なコマンド例を示します（利用する OS に合わせて調整してください）。
+
+Debian/Ubuntu の例:
+```bash
+sudo apt update
+sudo apt install -y build-essential libsndfile1-dev libportaudio2 portaudio19-dev ffmpeg
+```
+
+macOS (Homebrew):
+```bash
+brew install portaudio ffmpeg libsndfile
+```
+
+Windows: `sounddevice` のビルド済み wheel がない環境では Visual C++ Build Tools が必要になる場合があります。`ffmpeg` は https://ffmpeg.org から入手するか、choco/scoop を利用してください。
+
+また、Python パッケージをインストールする前に pip 等を最新化しておくことを推奨します:
+```bash
+python -m pip install --upgrade pip setuptools wheel
+```
 
 注意
 - `.env` と `logs/` は `.gitignore` 済み（機微情報・不要ファイルをコミットしない）。
@@ -142,13 +166,13 @@ Web UI を共有するだけで良い場合は Webhook を省略可能。Webhook
 
 1) 設定確認
 ```bash
-.venv311/bin/python -m transcriber.cli --show-config
+.venv/bin/python -m transcriber.cli --show-config
 ```
 `speechmatics.connection_url` と `audio.sample_rate=16000` を確認。
 
 2) 起動（Speechmatics）
 ```bash
-.venv311/bin/python -m transcriber.cli --backend=speechmatics --log-level=INFO
+.venv/bin/python -m transcriber.cli --backend=speechmatics --log-level=INFO
 ```
 正常時:
 - `Recognition started.` → `Final: ...` が出力され、`logs/meet-session.log` に追記されます。
@@ -166,7 +190,7 @@ Sanity テスト（任意）
 3) バックアップ起動（オフライン Vosk）
 ```bash
 # 事前に .env に VOSK_MODEL_PATH を設定
-.venv311/bin/python -m transcriber.cli --backend=vosk --log-file logs/offline.log
+.venv/bin/python -m transcriber.cli --backend=vosk --log-file logs/offline.log
 ```
 
 ---
@@ -176,8 +200,7 @@ Sanity テスト（任意）
 - 認証: **APIキー→短期JWTの自動取得**に対応
   - `transcriber/asr/speechmatics_backend.py` で管理プラットフォーム `https://mp.speechmatics.com/v1/api_keys?type=rt` に POST し、`key_value`（短期トークン）を取得。
   - 取得トークンは `Authorization: Bearer <JWT>` で WS に付与。
-- 接続 URL: `wss://<region>.rt.speechmatics.com/v2/<language>` 形式
-  - 実装で言語サフィックス（`/eo` 等）を補完。
+- 接続 URL: `wss://<region>.rt.speechmatics.com/v2` を base に設定し、`SPEECHMATICS_LANGUAGE` で言語（例: `eo`）を指定してください。実装は base URL に言語サフィックス（`/eo` 等）を付加して接続します。
 - プロトコルメッセージ
   - StartRecognition を JSON で送信
   - `RecognitionStarted` を受けてから音声送信（非同期イベント待機）
@@ -308,7 +331,7 @@ Sanity テスト（任意）
 
 ```bash
 # 仮想環境
-source .venv311/bin/activate
+source .venv/bin/activate
 
 # デバイス列挙
 python -m transcriber.cli --list-devices
@@ -332,7 +355,7 @@ python -m transcriber.cli --backend=speechmatics --log-level=DEBUG
 
 ```bash
 install -Dm755 scripts/run_transcriber.sh ~/bin/run-transcriber.sh
-source .venv311/bin/activate
+source .venv/bin/activate
 ~/bin/run-transcriber.sh                # backend=speechmatics, PORT=8765
 PORT=8766 ~/bin/run-transcriber.sh      # ポートを変える場合
 ```
@@ -343,7 +366,7 @@ PORT=8766 ~/bin/run-transcriber.sh      # ポートを変える場合
 
 ```bash
 install -Dm755 scripts/prep_webui.sh ~/bin/prep-webui.sh
-source .venv311/bin/activate
+source .venv/bin/activate
 ~/bin/prep-webui.sh && python -m transcriber.cli --backend=speechmatics --log-level=INFO
 ```
 
@@ -352,9 +375,12 @@ source .venv311/bin/activate
 「8765 を完全に空にしたいときは、以下 3 行を続けて実行してください」。Chrome の Network Service などが掴んでいる場合でも強制的に開放します。
 
 ```bash
+# Try graceful shutdown first; force-kill can have side-effects. Prefer SIGTERM before SIGKILL.
 pkill -f "python -m transcriber.cli" || true
-lsof -t -iTCP:8765 | xargs -r kill -9 || true
-sleep 0.5 && lsof -iTCP:8765    # 何も出なければOK
+sleep 0.2
+lsof -t -iTCP:8765 | xargs -r kill || true   # SIGTERM
+sleep 0.5 && lsof -iTCP:8765 || true
+# If the port remains held and you understand the risk, consider kill -9 only after consultation.
 ```
 
 その後、必要に応じて通常どおり `python -m transcriber.cli ...` を再起動してください。

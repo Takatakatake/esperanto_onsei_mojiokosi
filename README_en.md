@@ -1,6 +1,6 @@
 # Esperanto Realtime Transcription
 
-English version. For Japanese, see `README.md` or `README_ja.md`.
+English version. For Japanese, see `README.md`.
 
 Realtime transcription pipeline tailored for Esperanto conversations on Zoom and Google Meet.  
 The implementation follows the design principles captured in the proposal document:
@@ -21,7 +21,7 @@ Note:
 ## 1. Prerequisites
 
 - Python 3.10+ (tested on CPython 3.10/3.11)
-- `virtualenv` or `uv` for dependency isolation
+- `virtualenv` or `python -m venv` for dependency isolation (this document uses `.venv` as the virtualenv name; if you prefer a Python 3.11-specific env you may use `.venv311`).
 - Audio loopback from Zoom/Meet into the local machine (VB-Audio, VoiceMeeter, BlackHole, JACK)
 - Speechmatics account with realtime entitlement and API key
 - Zoom host privileges to obtain the Closed Caption POST URL (or Recall.ai/Meeting SDK)
@@ -42,9 +42,8 @@ python -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
-# The repo includes a masked `.env` for convenience (safe template).
-# If you already have `.env`, open it and replace values as needed.
-# If not, copy from the example and edit:
+# The repo includes a masked template file ` .env.example` for convenience.
+# Do not commit real secrets. If you do not have a `.env`, copy from the example and edit:
 test -f .env || cp .env.example .env
 ```
 
@@ -52,7 +51,8 @@ Edit these fields (example):
 
 ```ini
 SPEECHMATICS_API_KEY=****************************   # replace with your real key
-SPEECHMATICS_CONNECTION_URL=wss://eu2.rt.speechmatics.com/v2
+SPEECHMATICS_CONNECTION_URL=wss://eu2.rt.speechmatics.com/v2   # region base URL (e.g. eu2 / us2)
+SPEECHMATICS_LANGUAGE=eo                                     # specify language separately (the implementation will append a language suffix to the base URL)
 AUDIO_DEVICE_INDEX=8                               # from --list-devices
 WEB_UI_ENABLED=true
 TRANSLATION_ENABLED=true
@@ -208,7 +208,7 @@ Anticipated extensions:
 6) For production, run under a supervisor (systemd/pm2) with persistent logs/metrics.  
 7) Document participant consent; add automated “transcription active” notifications.  
 8) End-to-end translation test: set `TRANSLATION_TARGETS=ja,ko`, ensure Google Cloud Translation (or LibreTranslate) responds quickly, and verify Web UI/Discord output shows bilingual lines.
-   - If using Google Cloud Translation: set `TRANSLATION_PROVIDER=google`, and either `GOOGLE_TRANSLATE_CREDENTIALS_PATH=/path/to/service-account.json` or `GOOGLE_TRANSLATE_API_KEY`. Optionally set `GOOGLE_TRANSLATE_MODEL=nmt`. The service account must have Cloud Translation API permissions.
+  - If using Google Cloud Translation: set `TRANSLATION_PROVIDER=google`, and either `GOOGLE_TRANSLATE_CREDENTIALS_PATH=/path/to/service-account.json` or `GOOGLE_TRANSLATE_API_KEY`. Do NOT commit service-account JSON to the repository; prefer supplying the path via the `GOOGLE_APPLICATION_CREDENTIALS` environment variable or keeping the JSON outside the repo. Optionally set `GOOGLE_TRANSLATE_MODEL=nmt`. The service account must have Cloud Translation API permissions.
 
 For alternate capture paths (Recall.ai bots, Meet Media API wrappers, Whisper fallback), reuse the abstractions in `audio.py` and `transcriber/asr/`—new producers/consumers slot in without changing pipeline control logic.
 
@@ -220,7 +220,7 @@ Keep the Web UI on a fixed port (8765) and avoid “already in use” loops with
 
 ```bash
 install -Dm755 scripts/run_transcriber.sh ~/bin/run-transcriber.sh
-source /media/yamada/SSD-PUTA1/CODEX作業用202510/.venv311/bin/activate
+source /media/yamada/SSD-PUTA1/CODEX作業用202510/.venv/bin/activate
 ~/bin/run-transcriber.sh              # defaults: backend=speechmatics, log-level=INFO
 ```
 
@@ -236,7 +236,7 @@ Prefer manual runs? Use the prep script once per run:
 
 ```bash
 install -Dm755 scripts/prep_webui.sh ~/bin/prep-webui.sh
-source /media/yamada/SSD-PUTA1/CODEX作業用202510/.venv311/bin/activate
+source /media/yamada/SSD-PUTA1/CODEX作業用202510/.venv/bin/activate
 ~/bin/prep-webui.sh && python -m transcriber.cli --backend=speechmatics --log-level=INFO
 ```
 
@@ -245,9 +245,12 @@ source /media/yamada/SSD-PUTA1/CODEX作業用202510/.venv311/bin/activate
 To fully free port 8765, run these three lines (also kills any Chrome/NetworkService holder):
 
 ```bash
+# Try graceful shutdown first; force-kill can have side effects.
 pkill -f "python -m transcriber.cli" || true
-lsof -t -iTCP:8765 | xargs -r kill -9 || true
-sleep 0.5 && lsof -iTCP:8765    # should print nothing
+sleep 0.2
+lsof -t -iTCP:8765 | xargs -r kill || true   # SIGTERM first
+sleep 0.5 && lsof -iTCP:8765 || true
+# If the port remains held and you understand the risk, consider kill -9 only after consultation.
 ```
 
 Then restart as usual: `python -m transcriber.cli ...`.
@@ -304,6 +307,31 @@ python3 scripts/diagnose_audio.py
   ```
 
 See `docs/ubuntu_audio_troubleshooting.md` for more details.
+
+---
+
+## System-level dependencies (note)
+
+This project requires some OS-level libraries in addition to Python packages (PortAudio, libsndfile, ffmpeg, etc.). Example install commands (adjust for your distro/environment):
+
+- Debian/Ubuntu (example):
+```bash
+sudo apt update
+sudo apt install -y build-essential libsndfile1-dev libportaudio2 portaudio19-dev ffmpeg
+```
+
+- macOS (Homebrew):
+```bash
+brew install portaudio ffmpeg libsndfile
+```
+
+- Windows: If a prebuilt wheel for `sounddevice` is not available, Visual C++ Build Tools may be required. Install `ffmpeg` from https://ffmpeg.org or via `choco`/scoop.
+
+Before installing Python dependencies, it is recommended to upgrade pip and wheel:
+```bash
+python -m pip install --upgrade pip setuptools wheel
+```
+
 
 ---
 
