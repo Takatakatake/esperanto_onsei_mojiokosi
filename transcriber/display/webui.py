@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import errno
 from pathlib import Path
 from typing import Optional, Set
 
@@ -16,9 +17,17 @@ class CaptionWebUI:
     to push updates: {"type": "partial"|"final", "text": "..."}.
     """
 
-    def __init__(self, host: str = "127.0.0.1", port: int = 8765, web_root: Optional[Path] = None) -> None:
+    def __init__(
+        self,
+        host: str = "127.0.0.1",
+        port: int = 8765,
+        web_root: Optional[Path] = None,
+        max_port_attempts: int = 5,
+    ) -> None:
         self.host = host
         self.port = port
+        self._base_port = port
+        self._max_port_attempts = max(1, max_port_attempts)
         self.web_root = web_root or (Path(__file__).resolve().parent.parent.parent / "web")
         self._app: Optional[web.Application] = None
         self._runner: Optional[web.AppRunner] = None
@@ -34,9 +43,35 @@ class CaptionWebUI:
         self._app = app
         self._runner = web.AppRunner(app)
         await self._runner.setup()
-        self._site = web.TCPSite(self._runner, self.host, self.port)
-        await self._site.start()
-        logging.info("Caption Web UI running at http://%s:%d", self.host, self.port)
+
+        attempts = 0
+        last_error: Optional[Exception] = None
+        while attempts < self._max_port_attempts:
+            desired_port = self._base_port + attempts
+            try:
+                self._site = web.TCPSite(self._runner, self.host, desired_port)
+                await self._site.start()
+            except OSError as exc:
+                last_error = exc
+                self._site = None
+                if exc.errno == errno.EADDRINUSE:
+                    logging.warning(
+                        "Caption Web UI port %s already in use; trying next port.", desired_port
+                    )
+                    attempts += 1
+                    continue
+                await self._runner.cleanup()
+                self._runner = None
+                raise
+            else:
+                self.port = desired_port
+                logging.info("Caption Web UI running at http://%s:%d", self.host, self.port)
+                return
+
+        if self._runner:
+            await self._runner.cleanup()
+            self._runner = None
+        raise OSError("Caption Web UI could not bind to any available port.") from last_error
 
     async def stop(self) -> None:
         for ws in list(self._clients):
@@ -76,4 +111,3 @@ class CaptionWebUI:
         coros = [ws.send_str(data) for ws in list(self._clients) if not ws.closed]
         if coros:
             await asyncio.gather(*coros, return_exceptions=True)
-

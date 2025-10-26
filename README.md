@@ -7,6 +7,7 @@ The implementation follows the design principles captured in *エスペラント
 - Vosk offline backend as a zero-cost / air-gapped fallback
 - Zoom Closed Caption API injection for native on-screen subtitles
 - Pipeline abstraction ready for additional engines (e.g., Whisper streaming, Google STT)
+- Browser-based caption board with optional Japanese/Korean translations and Discord webhook batching
 
 > ⚠️ Speechmatics and Zoom endpoints require valid credentials and meeting-level permissions.  
 > Keep participants informed about live transcription to comply with privacy & platform policies.
@@ -50,7 +51,7 @@ SPEECHMATICS_LANGUAGE=eo
 ZOOM_CC_POST_URL=https://wmcc.zoom.us/closedcaption?... (host-provided URL)
 ```
 
-Optional overrides:
+Optional overrides (all values can be left unset if you stick with defaults):
 
 ```ini
 AUDIO_DEVICE_INDEX=8            # from --list-devices output
@@ -64,6 +65,19 @@ WHISPER_COMPUTE_TYPE=default     # e.g. float16 (for GPU)
 WHISPER_SEGMENT_DURATION=6.0
 WHISPER_BEAM_SIZE=1
 TRANSCRIPT_LOG_PATH=logs/esperanto-caption.log
+WEB_UI_ENABLED=true
+TRANSLATION_ENABLED=true
+TRANSLATION_PROVIDER=google
+TRANSLATION_SOURCE_LANGUAGE=eo
+TRANSLATION_TARGETS=ja,ko
+TRANSLATION_TIMEOUT_SECONDS=8.0
+GOOGLE_TRANSLATE_CREDENTIALS_PATH=/absolute/path/to/gen-lang-client-xxxx.json
+GOOGLE_TRANSLATE_MODEL=nmt
+# (API キー派生の場合は GOOGLE_TRANSLATE_API_KEY=... を設定)
+DISCORD_WEBHOOK_ENABLED=true
+DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
+DISCORD_BATCH_FLUSH_INTERVAL=2.0
+DISCORD_BATCH_MAX_CHARS=350
 ```
 
 ---
@@ -82,11 +96,20 @@ Start the pipeline (prints finals to stdout, pushes finals to Zoom):
 python -m transcriber.cli --log-level=INFO
 ```
 
+- With `WEB_UI_ENABLED=true` the lightweight caption board runs on `http://127.0.0.1:8765`. It displays the latest final transcript plus optional translations with per-language toggles (e.g. Japanese / Korean).
+- When a Discord webhook URL is configured the pipeline batches finals into natural sentences and posts a single message containing the Esperanto line and all enabled translations.
+
 Switch backends or override log output on demand:
 
 ```bash
 python -m transcriber.cli --backend=vosk --log-file=logs/offline.log
 python -m transcriber.cli --backend=whisper --log-level=DEBUG
+```
+
+- Translation smoke test (uses current `.env` settings):
+
+```bash
+scripts/test_translation.py "Bonvenon al nia kunsido."
 ```
 
 Stopping with `Ctrl+C` sends a graceful shutdown signal. Logs show:
@@ -116,6 +139,8 @@ Google Meet options:
 - `transcriber/asr/vosk_backend.py`: lightweight offline recognizer built on Vosk/Kaldi for zero-cost fallback.  
 - `transcriber/pipeline.py`: orchestrates audio capture, chosen backend, transcript logging, and caption delivery.  
 - `transcriber/zoom_caption.py`: throttled POSTs (`text/plain`, `seq` parameter) to Zoom’s Closed Caption API.  
+- `transcriber/translate/service.py`: async translation client (LibreTranslate-compatible) used to enrich Web UI/Discord outputs.  
+- `transcriber/discord/batcher.py`: debounce/aggregate Discord webhook posts and align them with translated text.  
 - `transcriber/cli.py`: CLI helpers for device discovery, config inspection, backend override, and graceful shutdown.
 
 Anticipated extensions (mirroring the proposal’s roadmap):
@@ -135,5 +160,122 @@ Anticipated extensions (mirroring the proposal’s roadmap):
 5. Benchmark the Whisper backend on your hardware (`python -m transcriber.cli --backend=whisper`) to understand GPU/CPU load and tune `WHISPER_SEGMENT_DURATION`.  
 6. When scaling to production, wrap the CLI with a supervisor (systemd, pm2) and add persistent logging/metrics as emphasised in the guidelines.  
 7. Document participant consent workflow; automate “transcription active” notifications inside meeting invites.
+8. Test the translation pipeline end-to-end: set `TRANSLATION_TARGETS=ja,ko`, confirm Google Cloud Translation（or LibreTranslate）responds quickly, and verify that Web UI toggles/Discord posts include the expected bilingual lines.
+   - Google Cloud Translationを使う場合は `TRANSLATION_PROVIDER=google`、`GOOGLE_TRANSLATE_CREDENTIALS_PATH=/path/to/service-account.json` または `GOOGLE_TRANSLATE_API_KEY` を設定し、必要なら `GOOGLE_TRANSLATE_MODEL=nmt` などを指定します。サービスアカウントには Cloud Translation API の権限を付与してください。
 
 For questions on alternate capture paths (Recall.ai bots, Meet Media API wrappers, Whisper fallback) reuse the abstractions in `audio.py` and `transcriber/asr/`—new producers/consumers slot in without touching the pipeline control logic.
+
+---
+
+## 7. Recommended Launch Workflow
+
+To keep the Web UI on a fixed port (8765) and avoid “already in use” loops, a tiny launcher is provided:
+
+```bash
+install -Dm755 scripts/run_transcriber.sh ~/bin/run-transcriber.sh
+source /media/yamada/SSD-PUTA1/CODEX作業用202510/.venv311/bin/activate
+~/bin/run-transcriber.sh              # defaults to backend=speechmatics, log-level=INFO
+```
+
+`run_transcriber.sh` closes stale listeners on the selected port (default 8765), waits for the socket to truly free, and then starts `python -m transcriber.cli`. The browser always connects to `http://127.0.0.1:8765` and translations (Google ja/ko) show up immediately.
+
+Need a different port or backend? Override via environment variables:
+
+```bash
+PORT=8766 LOG_LEVEL=DEBUG BACKEND=whisper ~/bin/run-transcriber.sh
+```
+
+Prefer to keep manually running `python -m transcriber.cli`? Use the prep script once per run:
+
+```bash
+install -Dm755 scripts/prep_webui.sh ~/bin/prep-webui.sh
+source /media/yamada/SSD-PUTA1/CODEX作業用202510/.venv311/bin/activate
+~/bin/prep-webui.sh && python -m transcriber.cli --backend=speechmatics --log-level=INFO
+```
+
+`prep-webui.sh` terminates lingering CLI processes, frees port 8765, and waits until it is available so the subsequent CLI command binds that port on the first try.
+
+Need to hard-reset the port manually? Run these three lines (they also kill any Chrome/NetworkService connection holding 8765):
+
+```bash
+source /media/yamada/SSD-PUTA1/CODEX作業用202510/.venv311/bin/activate
+pkill -f "python -m transcriber.cli"
+lsof -t -iTCP:8765 | xargs -r kill -9
+sleep 0.5 && lsof -iTCP:8765    # should print nothing
+python -m transcriber.cli --backend=speechmatics --log-level=INFO
+```
+
+---
+
+## 8. Audio Loopback Stability
+
+PipeWire/WirePlumber occasionally revert the default input to a hardware mic, which breaks Meet loopback capture. To lock the defaults and auto-heal if the state files change, follow `docs/audio_loopback.md`:
+
+```bash
+install -Dm755 scripts/wp-force-monitor.sh ~/bin/wp-force-monitor.sh
+~/bin/wp-force-monitor.sh                           # once, forces analog monitor
+cp systemd/wp-force-monitor.{service,path} ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now wp-force-monitor.service wp-force-monitor.path
+```
+
+`wp-force-monitor` keeps the default source on `alsa_output...analog-stereo.monitor` so Discord/Speechmatics always hear the Meet loopback, while leaving the sink under user control unless `SINK_NAME=...` is provided.
+
+---
+
+## 6. Audio Device Hot-Reload (Ubuntu/Linux)
+
+The application includes automatic audio device change detection and reconnection to handle system-level device switching without interrupting the transcription pipeline.
+
+### Features
+
+- **Automatic Device Monitoring**: Checks default input device every 2 seconds (configurable)
+- **Seamless Reconnection**: Automatically reconnects to the new device when changed
+- **Health Checks**: Detects when the audio stream stops receiving data (5-second timeout) and automatically restarts
+- **Error Recovery**: Automatically recovers from stream errors with retry logic
+
+### Configuration
+
+Add to `.env` to customize the monitoring interval:
+
+```ini
+AUDIO_DEVICE_CHECK_INTERVAL=2.0  # seconds between device checks (default: 2.0)
+```
+
+### Diagnostics
+
+Run the audio device diagnostic tool to see all available devices:
+
+```bash
+python3 scripts/diagnose_audio.py
+```
+
+This will show:
+- All available audio input/output devices
+- Current default devices
+- Device indices for configuration
+- Recommendations for loopback setup
+
+### Common Issues (Ubuntu/PulseAudio)
+
+**Problem**: Audio stops when switching output devices in system settings
+
+**Cause**: Output device switching can affect loopback routing in PulseAudio/PipeWire
+
+**Solution**:
+1. The application will automatically reconnect within 2-5 seconds
+2. For persistent loopback, add to PulseAudio config:
+   ```bash
+   pactl load-module module-loopback latency_msec=1
+   ```
+
+**Problem**: Frequent reconnections
+
+**Solution**: Increase check interval or pin to a specific device:
+```ini
+AUDIO_DEVICE_CHECK_INTERVAL=5.0
+# Or pin to a specific device (see diagnose_audio.py output)
+AUDIO_DEVICE_INDEX=8
+```
+
+For detailed troubleshooting, see [docs/ubuntu_audio_troubleshooting.md](docs/ubuntu_audio_troubleshooting.md).

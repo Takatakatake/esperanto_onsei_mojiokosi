@@ -40,6 +40,8 @@ def print_settings() -> None:
         "audio": settings.audio.model_dump(),
         "zoom": settings.zoom.model_dump(),
         "logging": settings.logging.model_dump(),
+        "web": settings.web.model_dump(),
+        "discord": settings.discord.model_dump(),
     }
     if settings.speechmatics:
         filtered["speechmatics"] = {
@@ -50,6 +52,10 @@ def print_settings() -> None:
         filtered["vosk"] = settings.vosk.model_dump()
     if settings.whisper:
         filtered["whisper"] = settings.whisper.model_dump()
+    translation_dump = settings.translation.model_dump()
+    if translation_dump.get("libre_api_key"):
+        translation_dump["libre_api_key"] = "***redacted***"
+    filtered["translation"] = translation_dump
     print(json.dumps(filtered, indent=2, ensure_ascii=False))
 
 

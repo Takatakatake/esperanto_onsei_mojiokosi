@@ -14,6 +14,7 @@
   - JWT 認証: API キーからの自動 JWT 取得を実装（mp.speechmatics.com v1）
   - Zoom CC API: 送出器あり（Meet時は無効化）
   - ログ: `logs/meet-session.log` にタイムスタンプ付きで確定文を追記
+  - 表示: ローカル Web UI に確定文＋翻訳（日本語/韓国語など）を表示。Discord Webhook は一定文字数でバッチングし、原文＋翻訳をまとめて投稿
 
 ---
 
@@ -24,6 +25,8 @@
 3) `.env` を設定：`SPEECHMATICS_API_KEY`、`SPEECHMATICS_CONNECTION_URL`（EUは `wss://eu2.rt.speechmatics.com/v2`）、`AUDIO_DEVICE_INDEX`。
 4) `python -m transcriber.cli --show-config` で `connection_url` と `audio.sample_rate=16000` を確認。
 5) `python -m transcriber.cli --backend=speechmatics --log-level=INFO` で起動。`Recognition started.` → `Final:` が出ればOK。
+6) （翻訳/共有を使う場合）`.env` に `WEB_UI_ENABLED=true`、`TRANSLATION_ENABLED=true`、`TRANSLATION_PROVIDER=google`、`TRANSLATION_TARGETS=ja,ko` 等を設定。  
+　`install -Dm755 scripts/run_transcriber.sh ~/bin/run-transcriber.sh` 後、`source .venv311/bin/activate && ~/bin/run-transcriber.sh` を実行するとポート8765を解放→起動→ブラウザを自動で開く。ログの `Caption Web UI running at http://127.0.0.1:8765` を確認し、同URLを開いて翻訳表示を確認。
 
 ---
 
@@ -85,6 +88,20 @@ TRANSCRIPT_LOG_ENABLED=true
 TRANSCRIPT_LOG_PATH=logs/meet-session.log
 ```
 
+- 翻訳を使う場合は `.env` に以下を追記。デフォルト言語はエスペラント（`TRANSLATION_SOURCE_LANGUAGE=eo`）。運用では Google Cloud Translation（サービスアカウント JSON）を使う想定。LibreTranslate を使う場合は `TRANSLATION_PROVIDER=libre` に切り替え、`LIBRETRANSLATE_URL`/APIキーを指定する。
+  ```ini
+  WEB_UI_ENABLED=true
+  TRANSLATION_ENABLED=true
+  TRANSLATION_PROVIDER=google
+  TRANSLATION_TARGETS=ja,ko
+  GOOGLE_TRANSLATE_CREDENTIALS_PATH=/absolute/path/to/service-account.json
+  GOOGLE_TRANSLATE_MODEL=nmt
+  # 任意: GOOGLE_TRANSLATE_API_KEY=<APIキーを使う場合>
+  # 任意: LIBRETRANSLATE_API_KEY=<LibreTranslateを使う場合>
+  DISCORD_WEBHOOK_ENABLED=true
+  ```
+  Web UI を共有するだけで良い場合は Webhook を省略可能。Webhook を設定すると Discord 側に原文と翻訳をまとめたメッセージを数秒単位で投稿する。
+
 ### 3.1 GitHub からダウンロードしたユーザー向け（環境構築スクリプト）
 
 オンライン（通常）
@@ -133,6 +150,13 @@ TRANSCRIPT_LOG_PATH=logs/meet-session.log
 ```
 正常時:
 - `Recognition started.` → `Final: ...` が出力され、`logs/meet-session.log` に追記されます。
+- `WEB_UI_ENABLED=true` の場合は自動で `http://127.0.0.1:8765` が起動。ブラウザで開くと最新の確定文と翻訳（言語ごとにON/OFF可能なトグル）が表示されます。
+- `DISCORD_WEBHOOK_ENABLED=true` の場合は Discord チャンネルに数秒単位で原文＋翻訳をまとめたメッセージが投稿されます（1件あたり最大約350文字で折り返し）。
+- 翻訳 API の疎通確認（任意）:
+  ```bash
+  scripts/test_translation.py "Bonvenon al nia kunsido."
+  ```
+  `.env` の設定で LibreTranslate へ問い合わせ、各ターゲット言語の訳文を表示します。翻訳対象を指定していない、またはAPIが応答しない場合はその旨を知らせます。
 
 Sanity テスト（任意）
 - テスト用に「Ĉu vi aŭdis?」など短いフレーズを発話し、`Final:` 行がログへ追記されることを確認。
@@ -174,7 +198,19 @@ Sanity テスト（任意）
 - Discord
   - 音声取得は Meet/Zoom と同じく仮想オーディオをループバック（VoiceMeeter/BlackHole/PipeWire 等）。
   - Web UI をブラウザで開き、Discord の画面共有（ウィンドウ/タブ）で参加者に共有するのが最も簡単。
-  - `DISCORD_WEBHOOK_ENABLED=true` と `DISCORD_WEBHOOK_URL` を設定すると、最終行だけをテキストチャンネルへ自動投稿可能（Webhook はサーバ設定 → 連携サービス → ウェブフック で取得）。
+  - `DISCORD_WEBHOOK_ENABLED=true` と `DISCORD_WEBHOOK_URL` を設定すると、最終行を数秒以内にまとめて投稿（バッチング）します。投稿には原文と、設定した翻訳（日本語/韓国語など）が含まれます。
+
+### 6.1 翻訳表示・Discord 共有
+
+- Web UI の翻訳トグル
+  - 初回に翻訳が到着すると、ヘッダ右側に言語別トグル（例: 日本語・한국어）が自動で現れます。デフォルトはON。
+  - トグルをOFFにすると、メイン画面・履歴の該当言語が非表示になります。
+- 表示レイアウト
+  - メイン画面: 原文の直下に翻訳を縦並び表示。履歴にも同じ構成で蓄積されるため、後からスクロールして内容を確認可能。
+  - 文字サイズスライダーは翻訳部分にも反映される（相対的に少し小さめ）。
+- Discord Webhook
+  - 2秒間隔で確定文を蓄積し、まとまった文章単位で投稿。長文や高速連続確定の場合でもチャンネルがスパム化しません。
+  - 翻訳を有効化している場合は、`Esperanto:` に続けて各言語の翻訳を折り返しで表示。
 
 ---
 
@@ -185,9 +221,11 @@ Sanity テスト（任意）
   - `.env` を最新のキー/リージョン/デバイスに更新
   - 参加者・サーバ管理者へ字幕/録音の実施を事前告知
   - Discord Webhook を使う場合は投稿先チャンネル/権限を確認
+  - 翻訳を使う場合は LibreTranslate 等のエンドポイント疎通・利用制限を事前にチェック（`curl https://libretranslate.de/languages` など）
 - During
   - パイプライン起動後 `Recognition started.` を確認
   - Web UI を開いて画面共有（タブ共有やCompanionモードが安定）
+  - 翻訳と Discord 投稿が期待通りに反映されているか（トグルのON/OFF含む）を確認
   - CPU/GPU/ネットの負荷、ログ（Final/Partial）が進行しているか監視
   - Zoom: CC が表示されているか参加者に確認
 - Post
@@ -227,6 +265,10 @@ Sanity テスト（任意）
   - 原因: 短時間の連続接続/切断
   - 対処: 5〜10秒の待機後に再試行。連続テスト時は間隔を空ける
 
+- 翻訳が表示されない／`Translation to ja failed` ログ
+  - 原因: Google Cloud Translation の認証エラー、サービスアカウント権限不足、ターゲット言語コードの入力ミス、LibreTranslate エンドポイント不通
+  - 対処: `TRANSLATION_TARGETS` を確認。Google利用時は `GOOGLE_TRANSLATE_CREDENTIALS_PATH`（または API キー）と Cloud Translation API 権限・課金設定を確認。LibreTranslate を使う場合は `curl <LIBRETRANSLATE_URL>/languages` で疎通確認し、必要なら `LIBRETRANSLATE_API_KEY` を設定。
+
 - TLS/プロキシ関連の失敗
   - 原因: 企業プロキシや TLS インスペクション
   - 対処: `HTTPS_PROXY`/`HTTP_PROXY` の設定、`eu2.rt.speechmatics.com` と `mp.speechmatics.com` への 443 通信許可
@@ -253,7 +295,7 @@ Sanity テスト（任意）
 - Meet 向け字幕オーバーレイ（Electron/OBS）
 - Whisper バックエンドの最適化（GPU/Mシリーズで sub-sec 遅延）
 - 自動リトライ・再接続の強化、メトリクス収集/監視
-- 翻訳（eo→ja/en）の連結表示
+- 翻訳の高度化（用語集サポート/キャッシュ/バックアップ翻訳APIとの冗長化）
 
 ---
 
@@ -278,6 +320,53 @@ python -m transcriber.cli --backend=vosk --log-file logs/offline.log
 # デバッグログ
 python -m transcriber.cli --backend=speechmatics --log-level=DEBUG
 ```
+
+### 11.1 Web UI 起動を安定化させるラッパースクリプト
+
+`scripts/run_transcriber.sh` は Web UI の LISTEN ポート（既定 8765）を解放→CLI を起動するラッパーです。ブラウザや Chrome の Network Service が接続を握ったままでも LISTEN している古いプロセスだけを落とし、ポートが空くまで待機してから `python -m transcriber.cli` を実行します。
+
+```bash
+install -Dm755 scripts/run_transcriber.sh ~/bin/run-transcriber.sh
+source .venv311/bin/activate
+~/bin/run-transcriber.sh                # backend=speechmatics, PORT=8765
+PORT=8766 ~/bin/run-transcriber.sh      # ポートを変える場合
+```
+
+ブラウザはログに表示される URL（例: `http://127.0.0.1:8765`）にアクセスすれば即座に翻訳付きの Web UI が開きます。
+
+`python -m transcriber.cli` を手動で実行したい派は、事前に `scripts/prep_webui.sh` を叩いておくとポート掃除が一発で完了します。
+
+```bash
+install -Dm755 scripts/prep_webui.sh ~/bin/prep-webui.sh
+source .venv311/bin/activate
+~/bin/prep-webui.sh && python -m transcriber.cli --backend=speechmatics --log-level=INFO
+```
+
+`prep-webui.sh` は既存の CLI プロセスを終了し、8765 が LISTEN していない状態になるまで待ってからコマンドを返すので、続けて実行する `python -m ...` が必ず 8765 にバインドできます。
+
+どうしても 8765 が開放されない場合は、以下の 4 行で強制的にリセット可能です（Chrome の Network Service なども含め、8765 を掴んでいるプロセスをすべて終了します）。
+
+```bash
+source .venv311/bin/activate
+pkill -f "python -m transcriber.cli"
+lsof -t -iTCP:8765 | xargs -r kill -9
+sleep 0.5 && lsof -iTCP:8765    # 出力が空ならOK
+python -m transcriber.cli --backend=speechmatics --log-level=INFO
+```
+
+### 11.2 モニター入力の自動復旧（PipeWire/WirePlumber）
+
+PipeWire が既定ソースを物理マイクに戻すと Speechmatics/Discord が無音化します。`scripts/wp-force-monitor.sh` と systemd ユニットで monitor を固定しておくと安心です。手順は `docs/audio_loopback.md` 参照。概要:
+
+```bash
+install -Dm755 scripts/wp-force-monitor.sh ~/bin/wp-force-monitor.sh
+~/bin/wp-force-monitor.sh                  # 既定ソースを monitor に設定
+cp systemd/wp-force-monitor.{service,path} ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now wp-force-monitor.service wp-force-monitor.path
+```
+
+`SINK_NAME=... ~/bin/wp-force-monitor.sh` のように実行すると既定シンクも固定できます。WirePlumber が state ファイルを書き換えても数秒で monitor に戻るため、誤ってマイク入力に切り替わる事故を防げます。
 
 ---
 

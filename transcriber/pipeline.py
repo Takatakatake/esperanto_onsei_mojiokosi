@@ -5,11 +5,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-import re
+import webbrowser
+import functools
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from .asr import (
     SpeechmaticsRealtimeBackend,
@@ -25,9 +26,8 @@ from .audio import AudioCaptureError, AudioChunkStream
 from .config import BackendChoice, Settings, load_settings
 from .zoom_caption import ZoomCaptionPublisher
 from .display.webui import CaptionWebUI
-from .discord import DiscordNotifier
-import webbrowser
-import functools
+from .discord import DiscordBatcher, DiscordNotifier
+from .translate import TranslationService
 
 
 def _normalize_text(text: str) -> str:
@@ -60,6 +60,41 @@ class PipelineState:
 
         self.latest_partial = text
         return None
+
+
+class SentenceAssembler:
+    """Accumulate short fragments into sentence-sized chunks."""
+
+    def __init__(self, max_length: int = 120) -> None:
+        self._buffer: str = ""
+        self._max_length = max_length
+
+    def feed(self, fragment: str) -> List[str]:
+        fragment = fragment.strip()
+        if not fragment:
+            return []
+
+        if self._buffer:
+            self._buffer = f"{self._buffer} {fragment}".strip()
+        else:
+            self._buffer = fragment
+
+        sentences: List[str] = []
+        if self._buffer and (self._buffer[-1] in ".?!" or len(self._buffer) >= self._max_length):
+            sentences.append(self._buffer)
+            self._buffer = ""
+        return sentences
+
+    @property
+    def pending(self) -> str:
+        return self._buffer
+
+    def flush(self) -> List[str]:
+        if not self._buffer:
+            return []
+        pending = self._buffer
+        self._buffer = ""
+        return [pending]
 
 
 class TranscriptFileLogger:
@@ -122,7 +157,10 @@ class TranscriptionPipeline:
             if backend_override
             else self.settings.backend
         )
-        self._audio_stream = AudioChunkStream(self.settings.audio)
+        self._audio_stream = AudioChunkStream(
+            self.settings.audio,
+            check_interval=self.settings.audio.device_check_interval,
+        )
         self._zoom_publisher = ZoomCaptionPublisher(self.settings.zoom)
         self._transcript_logger = TranscriptFileLogger(
             self.settings.logging, override_path=transcript_log_override
@@ -130,10 +168,29 @@ class TranscriptionPipeline:
         self._web_ui: Optional[CaptionWebUI] = None
         self.state = PipelineState()
         self._running = False
+        self._sentence_assembler = SentenceAssembler()
         self._discord_notifier = DiscordNotifier(
             webhook_url=self.settings.discord.webhook_url,
             username=self.settings.discord.username,
             enabled=self.settings.discord.enabled,
+        )
+        self._discord_batcher = DiscordBatcher(
+            notifier=self._discord_notifier,
+            flush_interval=self.settings.discord.batch_flush_interval,
+            max_chars=self.settings.discord.batch_max_chars,
+        )
+        translation_cfg = self.settings.translation
+        self._translation_service = TranslationService(
+            enabled=translation_cfg.enabled,
+            source_language=translation_cfg.source_language,
+            targets=translation_cfg.targets,
+            provider=translation_cfg.provider,
+            libre_url=translation_cfg.libre_url,
+            libre_api_key=translation_cfg.libre_api_key,
+            timeout=translation_cfg.timeout_seconds,
+            google_api_key=translation_cfg.google_api_key,
+            google_model=translation_cfg.google_model,
+            google_credentials_path=translation_cfg.google_credentials_path,
         )
 
     async def run(self) -> None:
@@ -180,10 +237,16 @@ class TranscriptionPipeline:
             logging.error("Pipeline stopped due to error: %s", exc)
             raise
         finally:
+            try:
+                await self._flush_pending_sentences()
+            except Exception as exc:  # noqa: BLE001
+                logging.exception("Failed to flush pending sentences: %s", exc)
             if self._web_ui:
                 await self._web_ui.stop()
                 self._web_ui = None
+            await self._discord_batcher.close()
             await self._discord_notifier.close()
+            await self._translation_service.close()
             self._running = False
             logging.info("Transcription pipeline stopped.")
 
@@ -226,6 +289,45 @@ class TranscriptionPipeline:
 
         raise RuntimeError(f"Unsupported backend: {self.backend_choice}")
 
+    async def _emit_sentence(self, sentence: str, speaker: Optional[str]) -> None:
+        sentence = sentence.strip()
+        if not sentence:
+            return
+
+        translations: Dict[str, str] = {}
+        translation_result = await self._translation_service.translate(sentence)
+        translations = translation_result.translations
+
+        logging.info("Final: %s", sentence)
+        self._transcript_logger.log_final(sentence)
+        if self._web_ui:
+            await self._web_ui.broadcast(
+                {
+                    "type": "final",
+                    "text": sentence,
+                    "speaker": speaker,
+                    "translations": translations,
+                }
+            )
+        await self._discord_batcher.add_entry(sentence, translations)
+
+        zoom_payload = self.state.add_result(sentence, True)
+        if zoom_payload:
+            await self._zoom_publisher.post_caption(zoom_payload)
+
+    async def _flush_pending_sentences(self) -> None:
+        pending_sentences = self._sentence_assembler.flush()
+        for sentence in pending_sentences:
+            await self._emit_sentence(sentence, speaker=None)
+        if self._web_ui:
+            await self._web_ui.broadcast(
+                {
+                    "type": "partial",
+                    "text": "",
+                    "speaker": None,
+                }
+            )
+
     async def _pump_audio(
         self, audio_stream: AudioChunkStream, backend: StreamingTranscriptionBackend
     ) -> None:
@@ -236,33 +338,34 @@ class TranscriptionPipeline:
         async for result in backend.transcript_results():
             if result.is_final:
                 clean_text = _normalize_text(result.text)
-                logging.info("Final: %s", clean_text)
-                self._transcript_logger.log_final(clean_text)
+                sentences = self._sentence_assembler.feed(clean_text)
+                if sentences:
+                    for sentence in sentences:
+                        await self._emit_sentence(sentence, result.speaker)
+                pending = self._sentence_assembler.pending
                 if self._web_ui:
-                    await self._web_ui.broadcast({
-                        "type": "final",
-                        "text": clean_text,
-                        "speaker": result.speaker,
-                    })
-                await self._discord_notifier.send(clean_text)
-                normalized_for_state = clean_text
+                    await self._web_ui.broadcast(
+                        {
+                            "type": "partial",
+                            "text": pending,
+                            "speaker": result.speaker,
+                        }
+                    )
             else:
                 clean_partial = _normalize_text(result.text)
                 if clean_partial:
                     logging.debug("Partial: %s", clean_partial)
                     if self._web_ui:
-                        await self._web_ui.broadcast({
-                            "type": "partial",
-                            "text": clean_partial,
-                            "speaker": result.speaker,
-                        })
-                normalized_for_state = clean_partial
-
-            zoom_payload = self.state.add_result(
-                normalized_for_state, result.is_final
-            )
-            if zoom_payload:
-                await self._zoom_publisher.post_caption(zoom_payload)
+                        await self._web_ui.broadcast(
+                            {
+                                "type": "partial",
+                                "text": clean_partial,
+                                "speaker": result.speaker,
+                            }
+                        )
+                zoom_payload = self.state.add_result(clean_partial, False)
+                if zoom_payload:
+                    await self._zoom_publisher.post_caption(zoom_payload)
 
     async def shutdown(self) -> None:
         """Cancel any running tasks (best-effort)."""

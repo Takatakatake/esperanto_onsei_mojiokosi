@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from enum import Enum
 from functools import lru_cache
-from typing import Optional
+from typing import List, Optional
 
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field, ValidationError
@@ -24,6 +24,12 @@ class AudioInputConfig(BaseModel):
     blocksize: Optional[int] = Field(
         default=None,
         description="Optional low-level blocksize override for sounddevice.",
+    )
+    device_check_interval: float = Field(
+        default=2.0,
+        ge=0.5,
+        le=10.0,
+        description="Interval in seconds to check for audio device changes.",
     )
 
 
@@ -78,10 +84,28 @@ class WebUIConfig(BaseModel):
     open_browser: bool = False
 
 
+class TranslationConfig(BaseModel):
+    """Configuration for optional machine translation."""
+
+    enabled: bool = False
+    source_language: str = Field(default="eo", min_length=2)
+    targets: List[str] = Field(default_factory=list)
+    provider: str = Field(default="libre")
+    libre_url: str = Field(default="https://libretranslate.de", min_length=10)
+    libre_api_key: Optional[str] = None
+    timeout_seconds: float = Field(default=8.0, ge=1.0, le=60.0)
+    google_api_key: Optional[str] = None
+    google_model: Optional[str] = None
+    google_credentials_path: Optional[str] = None
+
+
 class DiscordConfig(BaseModel):
     enabled: bool = False
     webhook_url: Optional[str] = None
     username: str = "Esperanto STT"
+    batch_flush_interval: float = 2.0
+    batch_max_chars: int = 350
+
 
 class BackendChoice(str, Enum):
     """Supported transcription backends."""
@@ -114,6 +138,7 @@ class Settings(BaseModel):
     zoom: ZoomCaptionConfig = ZoomCaptionConfig()
     logging: TranscriptLoggingConfig = TranscriptLoggingConfig()
     web: WebUIConfig = WebUIConfig()
+    translation: TranslationConfig = TranslationConfig()
     discord: DiscordConfig = DiscordConfig()
 
 
@@ -183,6 +208,28 @@ def load_settings() -> Settings:
             overwrite=env.get("TRANSCRIPT_LOG_OVERWRITE", "false").lower() in {"1", "true", "yes"},
         )
 
+        raw_targets = env.get("TRANSLATION_TARGETS", "")
+        translation_targets = []
+        if raw_targets:
+            for candidate in raw_targets.replace(";", ",").split(","):
+                cleaned = candidate.strip()
+                if cleaned:
+                    translation_targets.append(cleaned)
+
+        translation_cfg = TranslationConfig(
+            enabled=env.get("TRANSLATION_ENABLED", "false").lower() in {"1", "true", "yes"}
+            or bool(translation_targets),
+            source_language=env.get("TRANSLATION_SOURCE_LANGUAGE", env.get("SPEECHMATICS_LANGUAGE", "eo")),
+            targets=translation_targets,
+            provider=env.get("TRANSLATION_PROVIDER", "libre"),
+            libre_url=env.get("LIBRETRANSLATE_URL", "https://libretranslate.de"),
+            libre_api_key=env.get("LIBRETRANSLATE_API_KEY"),
+            timeout_seconds=float(env.get("TRANSLATION_TIMEOUT_SECONDS", "8.0")),
+            google_api_key=env.get("GOOGLE_TRANSLATE_API_KEY"),
+            google_model=env.get("GOOGLE_TRANSLATE_MODEL"),
+            google_credentials_path=env.get("GOOGLE_TRANSLATE_CREDENTIALS_PATH"),
+        )
+
         settings = Settings(
             backend=backend,
             speechmatics=speechmatics_cfg,
@@ -202,6 +249,7 @@ def load_settings() -> Settings:
                     if "AUDIO_BLOCKSIZE" in env
                     else None
                 ),
+                device_check_interval=float(env.get("AUDIO_DEVICE_CHECK_INTERVAL", "2.0")),
             ),
             zoom=ZoomCaptionConfig(
                 caption_post_url=env.get("ZOOM_CC_POST_URL"),
@@ -217,10 +265,13 @@ def load_settings() -> Settings:
                 port=int(env.get("WEB_UI_PORT", "8765")),
                 open_browser=env.get("WEB_UI_OPEN_BROWSER", "false").lower() in {"1","true","yes"},
             ),
+            translation=translation_cfg,
             discord=DiscordConfig(
                 enabled=env.get("DISCORD_WEBHOOK_ENABLED", "false").lower() in {"1","true","yes"},
                 webhook_url=env.get("DISCORD_WEBHOOK_URL"),
                 username=env.get("DISCORD_WEBHOOK_USERNAME", "Esperanto STT"),
+                batch_flush_interval=float(env.get("DISCORD_BATCH_FLUSH_INTERVAL", "2.0")),
+                batch_max_chars=int(env.get("DISCORD_BATCH_MAX_CHARS", "350")),
             ),
         )
         return settings
