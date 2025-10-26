@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -28,6 +30,19 @@ import webbrowser
 import functools
 
 
+def _normalize_text(text: str) -> str:
+    if not text:
+        return ""
+    stripped = text.strip()
+    if not stripped:
+        return ""
+    normalized = re.sub(r"\s+", " ", stripped)
+    normalized = re.sub(r"\s+([,.;:?!])", r"\1", normalized)
+    normalized = re.sub(r"([\(\[\{])\s+", r"\1", normalized)
+    normalized = re.sub(r"\s+([\)\]\}])", r"\1", normalized)
+    return normalized
+
+
 @dataclass
 class PipelineState:
     """Tracks transcription state for downstream consumers."""
@@ -35,15 +50,15 @@ class PipelineState:
     final_transcripts: List[str] = field(default_factory=list)
     latest_partial: Optional[str] = None
 
-    def add_result(self, transcript: TranscriptSegment) -> Optional[str]:
-        if transcript.is_final:
-            if transcript.text:
-                self.final_transcripts.append(transcript.text)
+    def add_result(self, text: str, is_final: bool) -> Optional[str]:
+        if is_final:
+            if text:
+                self.final_transcripts.append(text)
                 self.latest_partial = None
-                return transcript.text
+                return text
             return None
 
-        self.latest_partial = transcript.text
+        self.latest_partial = text
         return None
 
 
@@ -80,14 +95,14 @@ class TranscriptFileLogger:
             self._file.close()
             self._file = None
 
-    def log_final(self, segment: TranscriptSegment) -> None:
-        if not self._file or not segment.text:
+    def log_final(self, text: str) -> None:
+        if not self._file or not text:
             return
 
-        line = segment.text
+        line = text
         if self._settings.include_timestamps:
             timestamp = datetime.now().isoformat(timespec="seconds")
-            line = f"[{timestamp}] {segment.text}"
+            line = f"[{timestamp}] {text}"
         self._file.write(line + "\n")
         self._file.flush()
 
@@ -220,26 +235,32 @@ class TranscriptionPipeline:
     async def _consume_transcripts(self, backend: StreamingTranscriptionBackend) -> None:
         async for result in backend.transcript_results():
             if result.is_final:
-                logging.info("Final: %s", result.text)
-                self._transcript_logger.log_final(result)
+                clean_text = _normalize_text(result.text)
+                logging.info("Final: %s", clean_text)
+                self._transcript_logger.log_final(clean_text)
                 if self._web_ui:
                     await self._web_ui.broadcast({
                         "type": "final",
-                        "text": result.text,
+                        "text": clean_text,
                         "speaker": result.speaker,
                     })
-                await self._discord_notifier.send(result.text)
+                await self._discord_notifier.send(clean_text)
+                normalized_for_state = clean_text
             else:
-                if result.text:
-                    logging.debug("Partial: %s", result.text)
+                clean_partial = _normalize_text(result.text)
+                if clean_partial:
+                    logging.debug("Partial: %s", clean_partial)
                     if self._web_ui:
                         await self._web_ui.broadcast({
                             "type": "partial",
-                            "text": result.text,
+                            "text": clean_partial,
                             "speaker": result.speaker,
                         })
+                normalized_for_state = clean_partial
 
-            zoom_payload = self.state.add_result(result)
+            zoom_payload = self.state.add_result(
+                normalized_for_state, result.is_final
+            )
             if zoom_payload:
                 await self._zoom_publisher.post_caption(zoom_payload)
 
