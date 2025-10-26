@@ -138,11 +138,21 @@ class TranscriptionPipeline:
                             host=self.settings.web.host,
                             port=self.settings.web.port,
                         )
-                        await self._web_ui.start()
-                        if self.settings.web.open_browser:
-                            url = f"http://{self.settings.web.host}:{self.settings.web.port}"
-                            loop = asyncio.get_running_loop()
-                            await loop.run_in_executor(None, functools.partial(webbrowser.open, url))
+                        try:
+                            await self._web_ui.start()
+                        except OSError as exc:
+                            logging.error(
+                                "Caption Web UI failed to start (%s). Port %s:%s in use?",
+                                exc,
+                                self.settings.web.host,
+                                self.settings.web.port,
+                            )
+                            self._web_ui = None
+                        else:
+                            if self.settings.web.open_browser:
+                                url = f"http://{self.settings.web.host}:{self.settings.web.port}"
+                                loop = asyncio.get_running_loop()
+                                await loop.run_in_executor(None, functools.partial(webbrowser.open, url))
                     async with self._audio_stream.connect() as audio_stream:
                         async with backend:
                             await self._main_loop(audio_stream, backend)
