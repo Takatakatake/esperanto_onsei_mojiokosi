@@ -23,6 +23,7 @@ from .audio import AudioCaptureError, AudioChunkStream
 from .config import BackendChoice, Settings, load_settings
 from .zoom_caption import ZoomCaptionPublisher
 from .display.webui import CaptionWebUI
+from .discord import DiscordNotifier
 import webbrowser
 import functools
 
@@ -114,6 +115,11 @@ class TranscriptionPipeline:
         self._web_ui: Optional[CaptionWebUI] = None
         self.state = PipelineState()
         self._running = False
+        self._discord_notifier = DiscordNotifier(
+            webhook_url=self.settings.discord.webhook_url,
+            username=self.settings.discord.username,
+            enabled=self.settings.discord.enabled,
+        )
 
     async def run(self) -> None:
         """Run the pipeline until cancelled."""
@@ -152,6 +158,7 @@ class TranscriptionPipeline:
             if self._web_ui:
                 await self._web_ui.stop()
                 self._web_ui = None
+            await self._discord_notifier.close()
             self._running = False
             logging.info("Transcription pipeline stopped.")
 
@@ -211,6 +218,7 @@ class TranscriptionPipeline:
                         "text": result.text,
                         "speaker": result.speaker,
                     })
+                await self._discord_notifier.send(result.text)
             else:
                 if result.text:
                     logging.debug("Partial: %s", result.text)

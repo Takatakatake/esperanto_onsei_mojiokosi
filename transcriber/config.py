@@ -77,6 +77,12 @@ class WebUIConfig(BaseModel):
     port: int = 8765
     open_browser: bool = False
 
+
+class DiscordConfig(BaseModel):
+    enabled: bool = False
+    webhook_url: Optional[str] = None
+    username: str = "Esperanto STT"
+
 class BackendChoice(str, Enum):
     """Supported transcription backends."""
 
@@ -108,6 +114,7 @@ class Settings(BaseModel):
     zoom: ZoomCaptionConfig = ZoomCaptionConfig()
     logging: TranscriptLoggingConfig = TranscriptLoggingConfig()
     web: WebUIConfig = WebUIConfig()
+    discord: DiscordConfig = DiscordConfig()
 
 
 @lru_cache(maxsize=1)
@@ -209,6 +216,11 @@ def load_settings() -> Settings:
                 host=env.get("WEB_UI_HOST", "127.0.0.1"),
                 port=int(env.get("WEB_UI_PORT", "8765")),
                 open_browser=env.get("WEB_UI_OPEN_BROWSER", "false").lower() in {"1","true","yes"},
+            ),
+            discord=DiscordConfig(
+                enabled=env.get("DISCORD_WEBHOOK_ENABLED", "false").lower() in {"1","true","yes"},
+                webhook_url=env.get("DISCORD_WEBHOOK_URL"),
+                username=env.get("DISCORD_WEBHOOK_USERNAME", "Esperanto STT"),
             ),
         )
         return settings
