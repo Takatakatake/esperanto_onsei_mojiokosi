@@ -37,6 +37,7 @@ class AudioChunkStream:
         self._last_missing_device_index: Optional[int] = None
         self._needs_downmix = self.config.channels > 1
         self._downmix_warning_logged = False
+        self._fatal_error: Optional[AudioCaptureError] = None
 
     def _get_default_input_device(self) -> Optional[int]:
         """Best-effort lookup of the current system default input device."""
@@ -183,6 +184,8 @@ class AudioChunkStream:
             if candidate not in attempt_devices:
                 attempt_devices.append(candidate)
 
+        if self.config.device_index is not None:
+            add_candidate(self.config.device_index)
         add_candidate(device)
         if device is not None:
             add_candidate(self._get_default_input_device())
@@ -231,6 +234,7 @@ class AudioChunkStream:
                             logging.info("Audio stream reconnected after error")
                         except Exception as exc:
                             logging.error("Failed to reconnect after stream error: %s", exc)
+                            self._register_fatal_error(AudioCaptureError(str(exc)))
                     continue
 
                 # Check if stream stopped receiving data (health check)
@@ -254,6 +258,7 @@ class AudioChunkStream:
                                     self._start_stream(new_device)
                             except Exception as retry_exc:
                                 logging.error("Failed to reconnect to alternate device: %s", retry_exc)
+                                self._register_fatal_error(AudioCaptureError(str(retry_exc)))
                     continue
 
                 # Check if default device changed (only if not using explicit device_index)
@@ -271,14 +276,81 @@ class AudioChunkStream:
                                 logging.info("Audio stream reconnected to new device")
                             except Exception as exc:
                                 logging.error("Failed to reconnect to new device: %s", exc)
+                                self._register_fatal_error(AudioCaptureError(str(exc)))
+                else:
+                    preferred = self.config.device_index
+                    if preferred is not None and self._current_device != preferred:
+                        try:
+                            sd.query_devices(preferred, kind="input")
+                        except Exception:
+                            # Preferred device still unavailable; keep current fallback
+                            pass
+                        else:
+                            logging.info(
+                                "Configured audio device %s is available again; switching back.",
+                                preferred,
+                            )
+                            async with self._reconnect_lock:
+                                try:
+                                    self._start_stream(preferred)
+                                    self._last_missing_device_index = None
+                                    logging.info(
+                                        "Audio stream reconnected to configured device index %s",
+                                        preferred,
+                                    )
+                                except Exception as exc:
+                                    logging.error(
+                                        "Failed to reconnect to configured device %s: %s",
+                                        preferred,
+                                        exc,
+                                    )
             except asyncio.CancelledError:
                 break
             except Exception as exc:
                 logging.exception("Error in device monitor: %s", exc)
+                self._register_fatal_error(AudioCaptureError(str(exc)))
+
+    def _register_fatal_error(self, error: AudioCaptureError) -> None:
+        if self._fatal_error is not None:
+            return
+        self._fatal_error = error
+        self._stopped.set()
+
+        if self._stream is not None:
+            try:
+                self._stream.stop()
+                self._stream.close()
+            except Exception as exc:  # noqa: BLE001
+                logging.debug("Error closing stream after fatal error: %s", exc)
+            finally:
+                self._stream = None
+
+        try:
+            self._queue.put_nowait(b"")
+        except queue.Full:
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                self._queue.put_nowait(b"")
+            except queue.Full:
+                pass
 
     @asynccontextmanager
     async def connect(self) -> AsyncGenerator["AudioChunkStream", None]:
         """Context manager that starts and stops the underlying audio stream."""
+
+        # Reset stop flag so the stream can be reused after a clean shutdown.
+        self._stopped = asyncio.Event()
+        self._fatal_error = None
+
+        # Drop any buffered chunks from a previous run before starting anew.
+        while not self._queue.empty():
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                break
 
         initial_device = self._get_effective_device()
         self._start_stream(initial_device)
@@ -318,10 +390,19 @@ class AudioChunkStream:
     async def next_chunk(self) -> bytes:
         """Await the next audio chunk."""
 
+        if self._fatal_error is not None:
+            raise self._fatal_error
+
         loop = asyncio.get_running_loop()
         if self._stopped.is_set():
             raise StopAsyncIteration
         try:
-            return await loop.run_in_executor(None, self._queue.get)
+            chunk = await loop.run_in_executor(None, self._queue.get)
         except Exception as exc:  # pylint: disable=broad-except
             raise AudioCaptureError(f"Failed to read audio chunk: {exc}") from exc
+        if self._fatal_error is not None:
+            raise self._fatal_error
+        if not isinstance(chunk, (bytes, bytearray)):
+            # Defensive: ensure callers only receive raw bytes.
+            raise AudioCaptureError("Received non-bytes audio chunk from queue.")
+        return bytes(chunk)

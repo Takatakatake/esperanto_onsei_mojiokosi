@@ -29,9 +29,10 @@ class SpeechmaticsRealtimeBackend(StreamingTranscriptionBackend):
         self.config = config
         self._websocket: Optional[WebSocketClientProtocol] = None
         self._listen_task: Optional[asyncio.Task[None]] = None
-        self._transcript_queue: "asyncio.Queue[TranscriptSegment]" = asyncio.Queue()
+        self._transcript_queue: asyncio.Queue[Optional[TranscriptSegment]] = asyncio.Queue()
         self._connected = asyncio.Event()
         self._recognition_started = asyncio.Event()
+        self._listener_error: Optional[SpeechmaticsRealtimeError] = None
 
     async def __aenter__(self) -> "SpeechmaticsRealtimeBackend":
         await self.connect()
@@ -45,6 +46,8 @@ class SpeechmaticsRealtimeBackend(StreamingTranscriptionBackend):
 
         self._connected.clear()
         self._recognition_started.clear()
+        self._listener_error = None
+        self._reset_transcript_queue()
         max_attempts = max(0, self.config.max_reconnect_attempts)
         backoff = max(self.config.reconnect_backoff_seconds, 0.1)
         attempt = 0
@@ -90,10 +93,10 @@ class SpeechmaticsRealtimeBackend(StreamingTranscriptionBackend):
         # Management Platform temporary token endpoint (per official SDK semantics)
         # POST https://mp.speechmatics.com/v1/api_keys?type=rt&sm-sdk=python-<ver>
         # Headers: Authorization: Bearer <API_KEY>
-        # Body: {"ttl": <seconds>, "region": "eu"|"us"}
+        # Body: {"ttl": <seconds>, "region": "eu"|"us"|"ca"|"ap"}
 
         parsed_ws = urlparse(self.config.connection_url)
-        region = "eu" if parsed_ws.netloc.startswith("eu") else "us"
+        region = self._infer_region_from_host(parsed_ws.hostname)
 
         endpoint = "https://mp.speechmatics.com/v1/api_keys"
         params = {"type": "rt", "sm-sdk": "python-custom"}
@@ -129,6 +132,23 @@ class SpeechmaticsRealtimeBackend(StreamingTranscriptionBackend):
             else:
                 path += f"/{lang}"
         return urlunparse(parsed._replace(path=path))
+
+    @staticmethod
+    def _infer_region_from_host(hostname: Optional[str]) -> str:
+        """Map Speechmatics host prefixes to JWT regions."""
+
+        if not hostname:
+            return "eu"
+        prefix = hostname.split(".")[0].lower()
+        if prefix.startswith("eu"):
+            return "eu"
+        if prefix.startswith("us"):
+            return "us"
+        if prefix.startswith("ca"):
+            return "ca"
+        if prefix.startswith("ap"):
+            return "ap"
+        return "eu"
 
     async def _build_connection_params(self) -> tuple[str, Dict[str, str]]:
         token = self.config.jwt_token
@@ -178,6 +198,8 @@ class SpeechmaticsRealtimeBackend(StreamingTranscriptionBackend):
     async def send_audio_chunk(self, chunk: bytes) -> None:
         """Send raw PCM audio bytes to the websocket."""
 
+        if self._listener_error is not None:
+            raise self._listener_error
         if self._websocket is None or not self._connected.is_set():
             raise SpeechmaticsRealtimeError("Connection is not established.")
         if not self._recognition_started.is_set():
@@ -195,6 +217,10 @@ class SpeechmaticsRealtimeBackend(StreamingTranscriptionBackend):
 
         while True:
             result = await self._transcript_queue.get()
+            if result is None:
+                if self._listener_error is not None:
+                    raise self._listener_error
+                continue
             yield result
 
     async def _send_start_message(self) -> None:
@@ -241,6 +267,10 @@ class SpeechmaticsRealtimeBackend(StreamingTranscriptionBackend):
                     logging.warning("Speechmatics warning: %s", payload)
                 elif msg_type in ("Error", "error"):
                     logging.error("Speechmatics error: %s", payload)
+                    await self._handle_listener_failure(
+                        SpeechmaticsRealtimeError(f"Speechmatics returned error: {payload}")
+                    )
+                    break
                 else:
                     logging.debug("Speechmatics message ignored: %s", payload)
         except asyncio.CancelledError:
@@ -248,7 +278,13 @@ class SpeechmaticsRealtimeBackend(StreamingTranscriptionBackend):
             raise
         except Exception as exc:  # pylint: disable=broad-except
             logging.exception("Error while listening to Speechmatics stream: %s", exc)
+            await self._handle_listener_failure(
+                SpeechmaticsRealtimeError("Speechmatics listener stopped unexpectedly.")
+            )
             raise SpeechmaticsRealtimeError("Listener stopped unexpectedly.") from exc
+        finally:
+            self._connected.clear()
+            self._recognition_started.clear()
 
     def _parse_transcript(self, payload: Dict) -> Optional[TranscriptSegment]:
         md = payload.get("metadata") or {}
@@ -275,3 +311,18 @@ class SpeechmaticsRealtimeBackend(StreamingTranscriptionBackend):
             transcript.speaker,
         )
         return transcript
+
+    async def _handle_listener_failure(self, error: SpeechmaticsRealtimeError) -> None:
+        if self._listener_error is None:
+            self._listener_error = error
+            if self._websocket and not self._websocket.closed:
+                with contextlib.suppress(Exception):
+                    await self._websocket.close(code=1011, reason=str(error))
+            await self._transcript_queue.put(None)
+
+    def _reset_transcript_queue(self) -> None:
+        old_queue = getattr(self, "_transcript_queue", None)
+        if old_queue is not None:
+            with contextlib.suppress(asyncio.QueueFull):
+                old_queue.put_nowait(None)
+        self._transcript_queue = asyncio.Queue()
